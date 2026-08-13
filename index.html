@@ -296,8 +296,64 @@ const RV_DEC=[{key:'',label:'Undecided',emoji:'🤔',color:'#9ca3af'},{key:'acce
 const RV_EVENTS=['Invitation Received','Invitation Accepted','Review Started','Review Submitted','Re-review','Completed'];
 const DEF_LABELS=['Submitted','With Editor','Correspondence Letter','Under Review','Review Complete','Minor Revision','Major Revision','Revision Requested','Revision Submitted','Accepted','Rejected','Withdrawn','Decision Pending','Proof Received','Published'];
 
+// BEGIN TIMELINE SORT HELPERS
+function timelineEventJournal(event){
+  return String(event?.note||'').split(';',1)[0].trim().toLowerCase().replace(/\s+/g,' ');
+}
+function compareTimelineEvents(a,b){
+  const dateOrder=String(a?.date||'').localeCompare(String(b?.date||''));
+  if(dateOrder)return dateOrder;
+
+  const aLabel=String(a?.label||'').trim().toLowerCase();
+  const bLabel=String(b?.label||'').trim().toLowerCase();
+  const isSubmissionRejectionPair=(aLabel==='submitted'&&bLabel==='rejected')||(aLabel==='rejected'&&bLabel==='submitted');
+  if(!isSubmissionRejectionPair)return 0;
+
+  const sameJournal=timelineEventJournal(a)===timelineEventJournal(b);
+  if(sameJournal)return aLabel==='submitted'?-1:1;
+  return aLabel==='rejected'?-1:1;
+}
+function orderSameDateTimelineGroup(group,descending=false){
+  const transitionPositions=[];
+  const transitions=[];
+  group.forEach((event,index)=>{
+    const label=String(event?.label||'').trim().toLowerCase();
+    if(label==='submitted'||label==='rejected'){
+      transitionPositions.push(index);
+      transitions.push(event);
+    }
+  });
+  const submittedCount=transitions.filter(event=>String(event?.label||'').trim().toLowerCase()==='submitted').length;
+  const rejectedCount=transitions.length-submittedCount;
+  if(submittedCount!==1||rejectedCount!==1)return group;
+
+  transitions.sort(compareTimelineEvents);
+  if(descending)transitions.reverse();
+  const ordered=[...group];
+  transitionPositions.forEach((position,index)=>{ordered[position]=transitions[index]});
+  return ordered;
+}
+function sortTimelineEvents(events,descending=false){
+  if(!Array.isArray(events))return[];
+  const byDate=events.map((event,index)=>({event,index})).sort((a,b)=>{
+    const order=String(a.event?.date||'').localeCompare(String(b.event?.date||''));
+    return order?(descending?-order:order):a.index-b.index;
+  }).map(item=>item.event);
+  const ordered=[];
+  for(let start=0;start<byDate.length;){
+    let end=start+1;
+    const date=String(byDate[start]?.date||'');
+    while(end<byDate.length&&String(byDate[end]?.date||'')===date)end++;
+    ordered.push(...orderSameDateTimelineGroup(byDate.slice(start,end),descending));
+    start=end;
+  }
+  return ordered;
+}
+// END TIMELINE SORT HELPERS
+
 const normalizePaperStatus=k=>k==='submitted'?'with_editor':k;
-const normalizePaperRecord=p=>({...p,status:normalizePaperStatus(p.status)});
+const normalizeTimelineRecord=record=>({...record,timeline:sortTimelineEvents(record?.timeline)});
+const normalizePaperRecord=p=>normalizeTimelineRecord({...p,status:normalizePaperStatus(p.status)});
 const gs=k=>ST.find(s=>s.key===normalizePaperStatus(k))||ST[0];
 const statusCategory=k=>normalizePaperStatus(k)==='revision_under_review'?'under_review':normalizePaperStatus(k);
 const countTimelineEvents=(items,eventLabel)=>items.reduce((total,item)=>total+(item.timeline||[]).filter(event=>String(event.label||'').trim().toLowerCase()===eventLabel.toLowerCase()).length,0);
@@ -386,7 +442,7 @@ async function loadL(){
   }
   const data=await response.json();
   papers=Array.isArray(data.papers)?data.papers.map(normalizePaperRecord):[];
-  reviews=Array.isArray(data.reviews)?data.reviews:[];
+  reviews=Array.isArray(data.reviews)?data.reviews.map(normalizeTimelineRecord):[];
   labels=Array.isArray(data.labels)?data.labels:[...DEF_LABELS];
   serverRevision=Number.isInteger(data.dataRevision)?data.dataRevision:0;
 
@@ -396,7 +452,7 @@ async function loadL(){
   const legacyHasData=legacy.papers.length>0||legacy.reviews.length>0;
   if(backendIsEmpty&&legacyHasData&&localStorage.getItem(migrationKey)!=='1'){
     papers=legacy.papers.map(normalizePaperRecord);
-    reviews=legacy.reviews;
+    reviews=legacy.reviews.map(normalizeTimelineRecord);
     labels=legacy.labels;
     await saveL();
     localStorage.setItem(migrationKey,'1');
@@ -407,7 +463,9 @@ async function loadL(){
   setStorageState('saved',data.updatedAt?`Backend data updated: ${data.updatedAt}`:'Backend data file connected');
 }
 function saveL(){
-  const snapshot=JSON.parse(JSON.stringify({version:DATA_VERSION,papers,reviews,labels}));
+  const orderedPapers=papers.map(normalizePaperRecord);
+  const orderedReviews=reviews.map(normalizeTimelineRecord);
+  const snapshot=JSON.parse(JSON.stringify({version:DATA_VERSION,papers:orderedPapers,reviews:orderedReviews,labels}));
   const revision=++saveRevision;
   setStorageState('saving','Writing data/app-data.json');
   const write=saveTail.then(async()=>{
@@ -489,7 +547,7 @@ function dismissBackup(){localStorage.setItem('pt_bkdismiss',td())}
 function isDismissed(){return localStorage.getItem('pt_bkdismiss')===td()}
 
 function doExport(){
-  const data={papers,reviews,labels,exportDate:td(),version:DATA_VERSION};
+  const data={papers:papers.map(normalizePaperRecord),reviews:reviews.map(normalizeTimelineRecord),labels,exportDate:td(),version:DATA_VERSION};
   const bl=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
   const a=document.createElement('a');a.href=URL.createObjectURL(bl);
   a.download='submission-review-backup_'+td()+'.json';a.click();
@@ -508,10 +566,10 @@ function doImport(){
             const pids=new Set(papers.map(p=>p.id));
             const rids=new Set(reviews.map(r=>r.id));
             papers=[...papers,...d.papers.filter(x=>!pids.has(x.id)).map(normalizePaperRecord)];
-            if(d.reviews) reviews=[...reviews,...d.reviews.filter(x=>!rids.has(x.id))];
+            if(d.reviews) reviews=[...reviews,...d.reviews.filter(x=>!rids.has(x.id)).map(normalizeTimelineRecord)];
           }else{
             papers=d.papers.map(normalizePaperRecord);
-            if(d.reviews) reviews=d.reviews;
+            if(d.reviews) reviews=d.reviews.map(normalizeTimelineRecord);
           }
           if(d.labels) labels=d.labels;
           persist();
@@ -700,7 +758,8 @@ function renderPaperCard(p){
   }
   let tlM='';
   if(p.timeline&&p.timeline.length){
-    const last=p.timeline.slice(-3);
+    const orderedTimeline=sortTimelineEvents(p.timeline);
+    const last=orderedTimeline.slice(-3);
     tlM='<div class="ctlm">';last.forEach(ev=>{tlM+=`<div class="ev"><span class="dot" style="background:${ev.color||'#94a3b8'}"></span>${fD(ev.date)} · ${esc(ev.label)}</div>`});
     if(p.timeline.length>3)tlM+=`<div class="ev" style="opacity:.5">… ${p.timeline.length} events total</div>`;
     tlM+='</div>';
@@ -759,7 +818,7 @@ function renderReviewCard(r){
 
   let tlM='';
   if(r.timeline&&r.timeline.length){
-    const last=r.timeline.slice(-2);
+    const last=sortTimelineEvents(r.timeline).slice(-2);
     tlM='<div class="ctlm">';last.forEach(ev=>{tlM+=`<div class="ev"><span class="dot" style="background:${ev.color||'#94a3b8'}"></span>${fD(ev.date)} · ${esc(ev.label)}</div>`});tlM+='</div>';
   }
 
@@ -786,7 +845,7 @@ function renderDashboard(data){
     const acc=countTimelineEvents(data,'Accepted');
     const rej=countTimelineEvents(data,'Rejected');
     const avgP=data.filter(p=>p.submittedDate&&['accepted','rejected'].includes(p.status)&&p.timeline&&p.timeline.length>1);
-    let avg=0;if(avgP.length){avg=Math.round(avgP.reduce((s,p)=>{const l=p.timeline[p.timeline.length-1];return s+dB(p.submittedDate,l.date||td())},0)/avgP.length)}
+    let avg=0;if(avgP.length){avg=Math.round(avgP.reduce((s,p)=>{const l=sortTimelineEvents(p.timeline).slice(-1)[0];return s+dB(p.submittedDate,l?.date||td())},0)/avgP.length)}
     const rate=acc+rej>0?Math.round(acc/(acc+rej)*100):0;
     const workIds=new Set(data.filter(p=>p.workId).map(p=>p.workId));
     const uniqueWorks=workIds.size+(data.filter(p=>!p.workId).length);
@@ -1231,7 +1290,7 @@ function renderDetail(){
   if(!p){detailId=null;render();return}
 
   const st=gs(p.status),rl=gr(p.role);
-  const tl=(p.timeline||[]).slice().sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+  const tl=sortTimelineEvents(p.timeline);
   const totalDays=p.submittedDate?dB(p.submittedDate,tl.length&&tl[tl.length-1].date?tl[tl.length-1].date:td()):0;
 
   let tlH='';
@@ -1354,7 +1413,7 @@ function showPaperForm(isN){
   function rf(){
     let so='';ST.forEach(s=>{const ac=p.status===s.key;so+=`<button type="button" class="sop ${ac?'ac':''}" data-sk="${s.key}" style="${ac?`border-color:${s.color};color:${s.color};background:${s.color}15`:''}">${s.emoji} ${s.label}</button>`});
     let ro='';RL.forEach(r=>{ro+=`<option value="${r.key}" ${p.role===r.key?'selected':''}>${r.label}</option>`});
-    const tl=(p.timeline||[]).slice().sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+    const tl=sortTimelineEvents(p.timeline,true);
     let tlH='';tl.forEach(ev=>{tlH+=`<div class="tl-ev"><div class="dot" style="background:${ev.color||'#94a3b8'}"></div><div class="date">${fD(ev.date)}</div><div class="label">${esc(ev.label)}</div>${ev.note?`<div class="note">${esc(ev.note)}</div>`:''}<button class="del-ev" data-evid="${ev.id}">✕</button></div>`});
     let tagH='';(p.tags||[]).forEach((t,i)=>{tagH+=`<span class="cs-tag">${esc(t)}<span class="x" data-ti="${i}">✕</span></span>`});
     let dlH='';labels.forEach(l=>{dlH+=`<option value="${esc(l)}">`});
@@ -1475,7 +1534,7 @@ function showReviewForm(isN){
 
   function rf(){
     let decOpts='';RV_DEC.forEach(d=>{decOpts+=`<option value="${d.key}" ${r.decision===d.key?'selected':''}>${d.emoji} ${d.label}</option>`});
-    const tl=(r.timeline||[]).slice().sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+    const tl=sortTimelineEvents(r.timeline,true);
     let tlH='';tl.forEach(ev=>{tlH+=`<div class="tl-ev"><div class="dot" style="background:${ev.color||'#94a3b8'}"></div><div class="date">${fD(ev.date)}</div><div class="label">${esc(ev.label)}</div>${ev.note?`<div class="note">${esc(ev.note)}</div>`:''}<button class="del-ev" data-evid="${ev.id}">✕</button></div>`});
 
     const reviewWorkIds=[...new Set(reviews.filter(x=>x.reviewWorkId&&x.id!==r.id).map(x=>x.reviewWorkId))];
@@ -1643,4 +1702,3 @@ init();
 </script>
 </body>
 </html>
-
