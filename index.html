@@ -87,7 +87,12 @@ body{font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;background:
 .ctop{display:flex;justify-content:space-between;align-items:flex-start;gap:7px;margin-bottom:4px}
 .ctt{font-size:13px;font-weight:700;line-height:1.35;flex:1;word-break:break-word}
 .rtag{display:inline-block;padding:2px 7px;border-radius:4px;font-size:10px;font-weight:700;white-space:nowrap;flex-shrink:0}
-.cjn{font-size:11.5px;color:var(--t2);font-style:italic;margin-bottom:7px}
+.cjn{font-size:11.5px;color:var(--t2);margin-bottom:7px;display:flex;align-items:center;gap:5px;flex-wrap:wrap}
+.cjn-title{font-style:italic;min-width:0}
+.jcr-flags{display:inline-flex;align-items:center;gap:3px;flex-shrink:0}
+.jcr-flag{display:inline-flex;align-items:center;justify-content:center;padding:1px 5px;border-radius:4px;font-size:9px;font-style:normal;font-weight:800;line-height:1.35;letter-spacing:.05px;border:1px solid transparent}
+.jcr-flag.q{color:#6d28d9;background:#f5f3ff;border-color:#ddd6fe}
+.jcr-flag.jif{color:#0369a1;background:#f0f9ff;border-color:#bae6fd}
 .sbdg{display:inline-block;padding:2px 7px;border-radius:4px;font-size:10px;font-weight:700;white-space:nowrap;flex-shrink:0}
 .cbot{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:5px}
 .qbs{display:flex;gap:3px;flex-wrap:wrap}
@@ -518,12 +523,56 @@ const roleDisplayLabel=p=>p.role==='other'&&Number(p.authorPosition)>0?`${gr(p.r
 const dB=(a,b)=>{if(!a||!b)return 0;return Math.round((new Date(b)-new Date(a))/86400000)};
 const td=()=>new Date().toISOString().slice(0,10);
 
+// BEGIN JOURNAL METRIC HELPERS
+function normalizeJournalTitle(value){
+  return String(value||'').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/&/g,' and ').replace(/[^a-z0-9]+/g,' ').trim().replace(/\s+/g,' ');
+}
+function journalMetricCacheEntry(metric,journal){
+  if(!metric||typeof metric!=='object'||metric.source!=='clarivate-jcr')return null;
+  const journalKey=normalizeJournalTitle(journal);
+  return journalKey&&String(metric.journalKey||'')===journalKey?metric:null;
+}
+function normalizedJournalMetric(metric,journal){
+  const cached=journalMetricCacheEntry(metric,journal);if(!cached)return null;
+  const quartile=/^Q[1-4]$/i.test(String(cached.quartile||''))?String(cached.quartile).toUpperCase():'';
+  const impactFactor=/^\d+(?:\.\d+)?$/.test(String(cached.impactFactor??'').trim())?String(cached.impactFactor).trim():'';
+  if(!quartile&&!impactFactor)return null;
+  return{...cached,quartile,impactFactor};
+}
+function cachedJournalMetricForJournal(journal,preferredMetric=null){
+  const preferred=journalMetricCacheEntry(preferredMetric,journal);if(preferred)return preferred;
+  for(const paper of papers){const metric=journalMetricCacheEntry(paper.journalMetric,journal);if(metric)return metric}
+  return null;
+}
+function journalMetricCacheIsFresh(metric,journal){
+  const cached=journalMetricCacheEntry(metric,journal);if(!cached)return false;
+  const checked=Date.parse(cached.checkedAt||cached.updatedAt||'');if(!Number.isFinite(checked))return false;
+  const maxAgeDays=cached.unmatched?30:180;
+  return Date.now()-checked<maxAgeDays*86400000;
+}
+function journalMetricForJournal(journal,preferredMetric=null){
+  const preferred=normalizedJournalMetric(preferredMetric,journal);if(preferred)return preferred;
+  for(const paper of papers){const metric=normalizedJournalMetric(paper.journalMetric,journal);if(metric)return metric}
+  return null;
+}
+function journalMetricFlags(journal,preferredMetric=null){
+  const metric=journalMetricForJournal(journal,preferredMetric);if(!metric)return'';
+  const title=`Clarivate JCR ${metric.jcrYear||''}`.trim();
+  return `<span class="jcr-flags" title="${esc(title)}">${metric.quartile?`<span class="jcr-flag q">${esc(metric.quartile)}</span>`:''}${metric.impactFactor?`<span class="jcr-flag jif">${esc(metric.impactFactor)}</span>`:''}</span>`;
+}
+function journalLineHTML(journal,preferredMetric=null){
+  if(!journal)return'<span style="opacity:.4;font-style:normal">Journal TBD</span>';
+  return `<span class="cjn-title">${esc(journal)}</span>${journalMetricFlags(journal,preferredMetric)}`;
+}
+// END JOURNAL METRIC HELPERS
+
 const LOCAL_HOSTS=new Set(['127.0.0.1','localhost','::1','[::1]']);
 const IS_LOCAL_BACKEND=LOCAL_HOSTS.has(window.location.hostname);
 const REMOTE_API_BASE=(document.querySelector('meta[name="submonitor-api-base"]')?.content||'').replace(/\/$/,'');
 const API_BASE=IS_LOCAL_BACKEND?'':REMOTE_API_BASE;
 const apiEndpoint=path=>`${API_BASE}${path}`;
 const DATA_API=apiEndpoint('/api/data');
+const JOURNAL_RESOLVE_API=apiEndpoint('/api/journals/resolve');
 const DATA_VERSION='2026V4';
 
 let papers=[], reviews=[];
@@ -542,6 +591,9 @@ let saveRevision=0;
 let serverRevision=0;
 let baseSnapshot={version:DATA_VERSION,papers:[],reviews:[],labels:[...DEF_LABELS]};
 let csrfToken='';
+let journalLookupDisabled=false;
+let journalMetricRefreshPromise=null;
+let journalMetricRefreshTimer=null;
 
 function storageStatusHTML(){
   const text={loading:'Connecting to backend',saving:'Writing data file',saved:'Connected',error:'Backend save failed'}[storageState]||'Unknown storage status';
@@ -605,6 +657,61 @@ async function writeBackendData(snapshot,baseRevision){
     throw error;
   }
   return response.json();
+}
+const waitFor=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+async function requestJournalMetric(journal,existingMetric=null){
+  if(journalLookupDisabled||normalizeJournalTitle(journal).length<3)return existingMetric;
+  const response=await fetch(`${JOURNAL_RESOLVE_API}?title=${encodeURIComponent(journal)}`,{cache:'no-store',credentials:'include'}).catch(()=>null);
+  if(!response){journalLookupDisabled=true;return existingMetric}
+  if(!response.ok){
+    if([404,429,502,503].includes(response.status))journalLookupDisabled=true;
+    return existingMetric;
+  }
+  const data=await response.json().catch(()=>null);if(!data)return existingMetric;
+  const checkedAt=new Date().toISOString().replace(/\.\d{3}Z$/,'Z');
+  if(data.matched&&journalMetricCacheEntry(data.metric,journal))return{...data.metric,checkedAt};
+  const validExisting=normalizedJournalMetric(existingMetric,journal);
+  if(validExisting)return{...existingMetric,checkedAt};
+  return{source:'clarivate-jcr',journalKey:normalizeJournalTitle(journal),jcrYear:data.jcrYear||'',unmatched:true,updatedAt:checkedAt,checkedAt};
+}
+async function resolveJournalMetricForJournal(journal,preferredMetric=null){
+  const cached=cachedJournalMetricForJournal(journal,preferredMetric);
+  if(journalMetricCacheIsFresh(cached,journal))return cloneMergeValue(cached);
+  return requestJournalMetric(journal,cached);
+}
+async function refreshMissingJournalMetrics(){
+  if(journalLookupDisabled||editing||storageState!=='saved')return;
+  const journals=new Map();
+  papers.forEach(p=>{const key=normalizeJournalTitle(p.journal);if(key&&!journals.has(key))journals.set(key,p.journal)});
+  const resolved=new Map();
+  for(const [key,journal] of journals){
+    if(editing)return;
+    const cached=cachedJournalMetricForJournal(journal);
+    if(journalMetricCacheIsFresh(cached,journal))resolved.set(key,cached);
+    else{
+      const metric=await requestJournalMetric(journal,cached);
+      if(metric)resolved.set(key,metric);
+      if(journalLookupDisabled)break;
+      await waitFor(260);
+    }
+  }
+  if(!resolved.size||editing||storageState==='saving')return;
+  let changed=false;
+  const nextPapers=papers.map(p=>{
+    const metric=resolved.get(normalizeJournalTitle(p.journal));
+    if(!metric||sameMergeValue(p.journalMetric,metric))return p;
+    changed=true;return{...p,journalMetric:cloneMergeValue(metric)};
+  });
+  if(!changed)return;
+  await saveL({snapshot:{version:DATA_VERSION,papers:nextPapers,reviews,labels}});
+  if(!editing)render();
+}
+function scheduleJournalMetricRefresh(delay=900){
+  if(journalLookupDisabled||journalMetricRefreshTimer||journalMetricRefreshPromise)return;
+  journalMetricRefreshTimer=setTimeout(()=>{
+    journalMetricRefreshTimer=null;
+    journalMetricRefreshPromise=refreshMissingJournalMetrics().catch(()=>{}).finally(()=>{journalMetricRefreshPromise=null});
+  },delay);
 }
 function conflictDescription(paths){
   const fields=[...new Set((paths||[]).map(path=>path.split('.').pop()).filter(Boolean))];
@@ -972,7 +1079,7 @@ function renderPaperCard(p){
     accBtn = `<button class="cact-btn" onclick="event.stopPropagation();openAccountModal('${p.id}','paper')">🔑 Account</button>`;
   }
 
-  return `<div class="pc" data-eid="${p.id}">${selectCheckbox}${roundH}<div class="ab" style="background:${st.color}"></div><div class="card-body"><div class="ctop"><div class="ctt">${esc(p.title)||'(Untitled)'}</div></div><div class="card-info-stack"><div class="cjn">${p.journal?esc(p.journal):'<span style="opacity:.4;font-style:normal">Journal TBD</span>'}</div><div class="tag-stack"><span class="sbdg" style="background:${st.color}15;color:${st.color};border:1px solid ${st.color}30">${statusDisplayLabel(p)}</span><span class="rtag" style="background:${rl.bg};color:${rl.fg};border:1px solid ${rl.bd}">${roleDisplayLabel(p)}</span></div></div><div style="display:flex;justify-content:space-between;align-items:center"><div class="pri">${pri}</div><div class="qbs">${qb}</div></div>${metaH?`<div class="cmeta">${metaH}</div>`:''}${exH}${histH}${tagH}${tlM}</div><div class="cact"><div class="cact-left"><button class="cact-btn" onclick="event.stopPropagation();viewTimeline('${p.id}')">📅 Timeline</button>${accBtn}</div><button class="cact-btn cact-del" onclick="event.stopPropagation();deleteItem('${p.id}','paper')">🗑️</button></div></div>`;
+  return `<div class="pc" data-eid="${p.id}">${selectCheckbox}${roundH}<div class="ab" style="background:${st.color}"></div><div class="card-body"><div class="ctop"><div class="ctt">${esc(p.title)||'(Untitled)'}</div></div><div class="card-info-stack"><div class="cjn">${journalLineHTML(p.journal,p.journalMetric)}</div><div class="tag-stack"><span class="sbdg" style="background:${st.color}15;color:${st.color};border:1px solid ${st.color}30">${statusDisplayLabel(p)}</span><span class="rtag" style="background:${rl.bg};color:${rl.fg};border:1px solid ${rl.bd}">${roleDisplayLabel(p)}</span></div></div><div style="display:flex;justify-content:space-between;align-items:center"><div class="pri">${pri}</div><div class="qbs">${qb}</div></div>${metaH?`<div class="cmeta">${metaH}</div>`:''}${exH}${histH}${tagH}${tlM}</div><div class="cact"><div class="cact-left"><button class="cact-btn" onclick="event.stopPropagation();viewTimeline('${p.id}')">📅 Timeline</button>${accBtn}</div><button class="cact-btn cact-del" onclick="event.stopPropagation();deleteItem('${p.id}','paper')">🗑️</button></div></div>`;
 }
 
 function renderReviewCard(r){
@@ -1020,7 +1127,7 @@ function renderReviewCard(r){
     accBtn = `<button class="cact-btn rev" onclick="event.stopPropagation();openAccountModal('${r.id}','review')">🔑 Account</button>`;
   }
 
-  return `<div class="pc ${dimmed}" data-rid="${r.id}">${selectCheckbox}${roundH}<div class="ab" style="background:${isComp?dec.color:st.color}"></div><div class="card-body"><div class="ctop"><div class="ctt">${esc(r.paperTitle)||'(Untitled Manuscript)'}</div></div><div class="card-info-stack"><div class="cjn">${r.journal?esc(r.journal):'<span style="opacity:.4;font-style:normal">Journal TBD</span>'}</div><div class="tag-stack"><span class="sbdg" style="background:${st.color}15;color:${st.color};border:1px solid ${st.color}30">${st.label}</span>${r.decision&&isComp?`<span class="sbdg" style="background:${dec.color}15;color:${dec.color};border:1px solid ${dec.color}30">${dec.label}</span>`:''}</div></div>${metaH?`<div class="cmeta">${metaH}</div>`:''}${r.link?`<a class="clk" href="${esc(r.link)}" target="_blank" onclick="event.stopPropagation()">🔗 Review Link</a>`:''}${histH}${tlM}</div><div class="cact"><div class="cact-left"><button class="cact-btn rev" onclick="event.stopPropagation();completeReview('${r.id}')">${isComp?'✏️ Update Decision':'✅ Complete'}</button>${accBtn}</div><button class="cact-btn cact-del" onclick="event.stopPropagation();deleteItem('${r.id}','review')">🗑️</button></div></div>`;
+  return `<div class="pc ${dimmed}" data-rid="${r.id}">${selectCheckbox}${roundH}<div class="ab" style="background:${isComp?dec.color:st.color}"></div><div class="card-body"><div class="ctop"><div class="ctt">${esc(r.paperTitle)||'(Untitled Manuscript)'}</div></div><div class="card-info-stack"><div class="cjn">${journalLineHTML(r.journal)}</div><div class="tag-stack"><span class="sbdg" style="background:${st.color}15;color:${st.color};border:1px solid ${st.color}30">${st.label}</span>${r.decision&&isComp?`<span class="sbdg" style="background:${dec.color}15;color:${dec.color};border:1px solid ${dec.color}30">${dec.label}</span>`:''}</div></div>${metaH?`<div class="cmeta">${metaH}</div>`:''}${r.link?`<a class="clk" href="${esc(r.link)}" target="_blank" onclick="event.stopPropagation()">🔗 Review Link</a>`:''}${histH}${tlM}</div><div class="cact"><div class="cact-left"><button class="cact-btn rev" onclick="event.stopPropagation();completeReview('${r.id}')">${isComp?'✏️ Update Decision':'✅ Complete'}</button>${accBtn}</div><button class="cact-btn cact-del" onclick="event.stopPropagation();deleteItem('${r.id}','review')">🗑️</button></div></div>`;
 }
 
 function renderDashboard(data){
@@ -1510,7 +1617,7 @@ function renderDetail(){
     <div class="det-hd"><div class="bk" id="goBack">← Back to List</div><h2>${esc(p.title)}</h2><div class="meta">
       <span class="sbdg" style="background:${st.color}15;color:${st.color};border:1px solid ${st.color}30">${statusDisplayLabel(p)}</span>
       <span class="rtag" style="background:${gr(p.role).bg};color:${gr(p.role).fg};border:1px solid ${gr(p.role).bd}">${roleDisplayLabel(p)}</span>
-      ${p.journal?`<span style="font-style:italic">${esc(p.journal)}</span>`:''}
+      ${p.journal?`<span class="cjn" style="margin:0">${journalLineHTML(p.journal,p.journalMetric)}</span>`:''}
       ${p.manuscriptId?`<span>${esc(p.manuscriptId)}</span>`:''}
       ${totalDays?`<span>${totalDays} days total</span>`:''}
     </div></div>
@@ -1727,15 +1834,17 @@ function showPaperForm(isN){
       else{p.workId=''}
 
       p.id=p.id||uid();
-      const draft=editableSnapshotFromData({version:DATA_VERSION,papers,reviews,labels:draftLabels});
-      const idx=draft.papers.findIndex(x=>x.id===p.id);
-      if(idx>=0)draft.papers[idx]=cloneMergeValue(p);else draft.papers.push(cloneMergeValue(p));
       const button=document.getElementById('fSv');
       button.disabled=true;button.textContent='Saving…';
       editing=p;
       try{
+        const metric=await resolveJournalMetricForJournal(p.journal,p.journalMetric);
+        if(metric)p.journalMetric=metric;else delete p.journalMetric;
+        const draft=editableSnapshotFromData({version:DATA_VERSION,papers,reviews,labels:draftLabels});
+        const idx=draft.papers.findIndex(x=>x.id===p.id);
+        if(idx>=0)draft.papers[idx]=cloneMergeValue(p);else draft.papers.push(cloneMergeValue(p));
         await saveL({snapshot:draft,confirmConflicts:true});
-        editing=null;rmF();render();
+        editing=null;rmF();render();scheduleJournalMetricRefresh(400);
       }catch{
         button.disabled=false;button.textContent=isN?'Add':'Save';
       }
@@ -1932,7 +2041,7 @@ function renderLogin(message=''){
       if(!response.ok)throw new Error(detail.error||`Authentication returned HTTP ${response.status}`);
       csrfToken=detail.csrfToken||'';
       renderBoot('Opening private data…');
-      await loadL();render();
+      await loadL();render();scheduleJournalMetricRefresh();
     }catch(error){
       errorBox.textContent=error.message||String(error);
       button.disabled=false;button.textContent='Unlock';input.focus();
@@ -1959,7 +2068,7 @@ async function init(){
     const auth=await getAuthStatus();
     if(!auth.authenticated){renderLogin();return}
     csrfToken=auth.csrfToken||'';
-    await loadL();render();
+    await loadL();render();scheduleJournalMetricRefresh();
   }catch(error){
     storageState='error';storageMessage=error.message;
     if(error.status===401)renderLogin();else renderBackendError(error);
