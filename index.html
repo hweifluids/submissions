@@ -1544,8 +1544,38 @@ function showForm(){
   }
 }
 
+function paperEditorDraft(source={}){
+  const draft=cloneMergeValue(source)||{};
+  return{
+    ...draft,
+    id:String(draft.id||''),title:String(draft.title||''),journal:String(draft.journal||''),
+    role:String(draft.role||'first'),authorPosition:draft.authorPosition||'',
+    status:normalizePaperStatus(draft.status||'preparing'),trackingUrl:String(draft.trackingUrl||''),
+    manuscriptId:String(draft.manuscriptId||''),coAuthors:String(draft.coAuthors||''),
+    submittedDate:String(draft.submittedDate||''),notes:String(draft.notes||''),
+    priority:Number(draft.priority)||1,tags:Array.isArray(draft.tags)?draft.tags:[],
+    timeline:Array.isArray(draft.timeline)?draft.timeline:[],workId:String(draft.workId||''),
+    deadline:String(draft.deadline||''),account:{...(draft.account||{}),username:String(draft.account?.username||''),password:String(draft.account?.password||'')}
+  };
+}
+
+function reviewEditorDraft(source={}){
+  const draft=cloneMergeValue(source)||{};
+  return{
+    ...draft,
+    id:String(draft.id||''),journal:String(draft.journal||''),paperTitle:String(draft.paperTitle||''),
+    round:Number(draft.round)||1,inviteDate:String(draft.inviteDate||''),dueDate:String(draft.dueDate||''),
+    decision:String(draft.decision||''),link:String(draft.link||''),notes:String(draft.notes||''),
+    status:String(draft.status||'pending'),timeline:Array.isArray(draft.timeline)?draft.timeline:[],
+    reviewWorkId:String(draft.reviewWorkId||''),account:{...(draft.account||{}),username:String(draft.account?.username||''),password:String(draft.account?.password||'')}
+  };
+}
+
 function showPaperForm(isN){
-  const p=isN?{id:'',title:'',journal:'',role:'first',authorPosition:'',status:'preparing',trackingUrl:'',manuscriptId:'',coAuthors:'',submittedDate:'',notes:'',priority:1,tags:[],timeline:[],workId:'',deadline:'',account:{}}:{...editing,timeline:[...(editing.timeline||[])],tags:[...(editing.tags||[])]};
+  const p=paperEditorDraft(isN?{}:editing);
+  const initialDraft=cloneMergeValue(p);
+  const draftLabels=[...labels];
+  let accountEditing=false;
 
   let ov=document.getElementById('f-ov');if(!ov){ov=document.createElement('div');ov.id='f-ov';ov.className='mo';document.body.appendChild(ov)}
 
@@ -1555,7 +1585,7 @@ function showPaperForm(isN){
     const tl=sortTimelineEvents(p.timeline,true);
     let tlH='';tl.forEach(ev=>{tlH+=`<div class="tl-ev"><div class="dot" style="background:${ev.color||'#94a3b8'}"></div><div class="date">${fD(ev.date)}</div><div class="label">${esc(ev.label)}</div>${ev.note?`<div class="note">${esc(ev.note)}</div>`:''}<button class="del-ev" data-evid="${ev.id}">✕</button></div>`});
     let tagH='';(p.tags||[]).forEach((t,i)=>{tagH+=`<span class="cs-tag">${esc(t)}<span class="x" data-ti="${i}">✕</span></span>`});
-    let dlH='';labels.forEach(l=>{dlH+=`<option value="${esc(l)}">`});
+    let dlH='';draftLabels.forEach(l=>{dlH+=`<option value="${esc(l)}">`});
 
     const workIds=[...new Set(papers.filter(x=>x.workId&&x.id!==p.id).map(x=>x.workId))];
     let workOpts='<option value="">(No link; independent submission)</option><option value="__new__">+ Create New Work Group</option>';
@@ -1584,10 +1614,10 @@ function showPaperForm(isN){
     <div class="fg"><label class="fl">Tags</label><div class="cs-row" id="tagR">${tagH}<input class="cs-add" id="tagIn" placeholder="+ Add tag"></div></div>
     <div class="fg"><label class="fl">Notes</label><textarea class="fi" id="fN" rows="2" placeholder="Review comments, revision plans...">${esc(p.notes||'')}</textarea></div>
 
-    <div class="fg" style="background:var(--ibg);padding:10px;border-radius:7px"><label class="fl">System Account (optional)</label>
+    <div class="fg" style="background:var(--ibg);padding:10px;border-radius:7px"><label class="fl" style="display:flex;justify-content:space-between;align-items:center">System Account (optional)<button type="button" class="ebtn" id="fAccEdit" style="text-transform:none;letter-spacing:0">${accountEditing?'Editing':'Edit credentials'}</button></label>
       <div class="fr" style="gap:10px">
-        <div class="fg" style="flex:1;margin-bottom:0"><input class="fi" id="fAccUser" value="${esc(p.account?.username||'')}" placeholder="Username / email"></div>
-        <div class="fg" style="flex:1;margin-bottom:0;position:relative"><input class="fi" id="fAccPass" type="password" value="${esc(p.account?.password||'')}" placeholder="Password"><button type="button" onclick="toggleFormPwd('fAccPass')" style="position:absolute;right:8px;top:28px;background:none;border:none;cursor:pointer;font-size:12px;color:var(--t3)">👁️</button></div>
+        <div class="fg" style="flex:1;margin-bottom:0"><input class="fi" id="fAccUser" value="${esc(p.account?.username||'')}" placeholder="Username / email" autocomplete="off" data-1p-ignore="true" data-lpignore="true" ${accountEditing?'':'disabled'}></div>
+        <div class="fg" style="flex:1;margin-bottom:0;position:relative"><input class="fi" id="fAccPass" type="password" value="${esc(p.account?.password||'')}" placeholder="Password" autocomplete="new-password" data-1p-ignore="true" data-lpignore="true" ${accountEditing?'':'disabled'}><button type="button" onclick="toggleFormPwd('fAccPass')" ${accountEditing?'':'disabled'} style="position:absolute;right:8px;top:28px;background:none;border:none;cursor:pointer;font-size:12px;color:var(--t3)">👁️</button></div>
       </div>
     </div>
 
@@ -1610,17 +1640,18 @@ function showPaperForm(isN){
     ${!isN?`<div style="text-align:center;margin-top:10px"><button class="ebtn" id="vTL" style="font-size:11px">📅 View Full Timeline</button></div>`:''}
     </div><div class="mf">${!isN?'<button class="bdel" id="fDl">🗑 Delete</button>':'<div></div>'}<div style="display:flex;gap:6px"><button class="bcan" id="fCa">Cancel</button><button class="bsav" id="fSv">${isN?'Add':'Save'}</button></div></div></div>`;
 
-    ov.onclick=e=>{if(e.target===ov){editing=null;rmF();render()}};
-    document.getElementById('fX').onclick=document.getElementById('fCa').onclick=()=>{editing=null;rmF();render()};
+    ov.onclick=e=>{if(e.target===ov)e.stopPropagation()};
+    document.getElementById('fX').onclick=document.getElementById('fCa').onclick=()=>closeWithoutSaving();
     document.querySelectorAll('#fSO .sop').forEach(b=>{b.onclick=()=>{sync();p.status=b.dataset.sk;if(p.status!=='revision')p.deadline='';rf()}});
     document.getElementById('fR').onchange=e=>{sync();p.role=e.target.value;if(p.role!=='other')p.authorPosition='';rf()};
+    document.getElementById('fAccEdit').onclick=()=>{sync();accountEditing=true;rf()};
 
     document.getElementById('evA').onclick=()=>{
       const l=document.getElementById('evL').value.trim();if(!l)return;
       if(!p.timeline)p.timeline=[];
       const st2=ST.find(s=>s.label===l);
       p.timeline.push({id:uid(),date:document.getElementById('evD').value,label:l,color:st2?st2.color:'#94a3b8',note:document.getElementById('evN').value.trim()});
-      if(!labels.includes(l)){labels.push(l);saveL()}
+      if(!draftLabels.includes(l))draftLabels.push(l);
       sync();rf();
     };
     document.querySelectorAll('.del-ev').forEach(b=>{b.onclick=()=>{p.timeline=p.timeline.filter(ev=>ev.id!==b.dataset.evid);sync();rf()}});
@@ -1628,9 +1659,9 @@ function showPaperForm(isN){
     document.getElementById('tagIn').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();const v=e.target.value.trim();if(v&&!p.tags.includes(v)){p.tags.push(v);sync();rf()}}};
 
     const vtl=document.getElementById('vTL');
-    if(vtl)vtl.onclick=()=>{sync();if(!isN){const idx=papers.findIndex(x=>x.id===p.id);if(idx>=0)papers[idx]=p;saveL()}editing=null;rmF();detailId=p.id;render()};
+    if(vtl)vtl.onclick=()=>closeWithoutSaving(()=>{detailId=p.id});
 
-    document.querySelectorAll('.go').forEach(g=>{g.onclick=()=>{sync();if(!isN){const idx=papers.findIndex(x=>x.id===p.id);if(idx>=0)papers[idx]=p;saveL()}editing=null;rmF();detailId=g.dataset.goid;render()}});
+    document.querySelectorAll('.go').forEach(g=>{g.onclick=()=>closeWithoutSaving(()=>{detailId=g.dataset.goid})});
 
     document.getElementById('fSv').onclick=async()=>{
       sync();if(!p.title.trim()){toast('Please enter a title','error');return}
@@ -1640,7 +1671,7 @@ function showPaperForm(isN){
       else{p.workId=''}
 
       p.id=p.id||uid();
-      const draft=editableSnapshotFromData({version:DATA_VERSION,papers,reviews,labels});
+      const draft=editableSnapshotFromData({version:DATA_VERSION,papers,reviews,labels:draftLabels});
       const idx=draft.papers.findIndex(x=>x.id===p.id);
       if(idx>=0)draft.papers[idx]=cloneMergeValue(p);else draft.papers.push(cloneMergeValue(p));
       const button=document.getElementById('fSv');
@@ -1668,16 +1699,31 @@ function showPaperForm(isN){
       p.notes=document.getElementById('fN')?.value||'';
       p.priority=parseInt(document.getElementById('fPr')?.value||'1');
       p.deadline=p.status==='revision'?(document.getElementById('fDL')?.value||''):'';
-      if(!p.account)p.account={};
-      p.account.username=document.getElementById('fAccUser')?.value||'';
-      p.account.password=document.getElementById('fAccPass')?.value||'';
+      if(accountEditing){
+        if(!p.account)p.account={};
+        p.account.username=document.getElementById('fAccUser')?.value||'';
+        p.account.password=document.getElementById('fAccPass')?.value||'';
+      }
+    }
+
+    function closeWithoutSaving(afterClose){
+      sync();
+      const workChanged=(document.getElementById('fWk')?.value||'')!==(initialDraft.workId||'');
+      const pendingInput=Boolean(document.getElementById('evL')?.value.trim()||document.getElementById('evN')?.value.trim()||document.getElementById('tagIn')?.value.trim());
+      const changedFields=[...new Set([...Object.keys(initialDraft),...Object.keys(p)])].filter(key=>!sameMergeValue(initialDraft[key],p[key]));
+      if((changedFields.length||workChanged||pendingInput)&&!confirm('Discard the unsaved changes in this editor?'))return;
+      editing=null;rmF();
+      if(afterClose)afterClose();
+      render();
     }
   }
   rf();setTimeout(()=>document.getElementById('fT')?.focus(),80);
 }
 
 function showReviewForm(isN){
-  const r=isN?{id:'',journal:'',paperTitle:'',round:1,inviteDate:td(),dueDate:'',decision:'',link:'',notes:'',status:'pending',timeline:[],account:{},reviewWorkId:''}:{...editing,timeline:[...(editing.timeline||[])]};
+  const r=reviewEditorDraft(isN?{inviteDate:td()}:editing);
+  const initialDraft=cloneMergeValue(r);
+  let accountEditing=false;
 
   let ov=document.getElementById('f-ov');if(!ov){ov=document.createElement('div');ov.id='f-ov';ov.className='mo';document.body.appendChild(ov)}
 
@@ -1705,10 +1751,10 @@ function showReviewForm(isN){
     <div class="fg"><label class="fl">Review System Link</label><input class="fi rev" id="rvL" value="${esc(r.link)}" placeholder="https://..."></div>
     <div class="fg"><label class="fl">Review Notes</label><textarea class="fi" id="rvN" rows="3" placeholder="Assessment, major issues...">${esc(r.notes||'')}</textarea></div>
 
-    <div class="fg" style="background:var(--ibg);padding:10px;border-radius:7px;margin-top:10px"><label class="fl">Review System Account (optional)</label>
+    <div class="fg" style="background:var(--ibg);padding:10px;border-radius:7px;margin-top:10px"><label class="fl" style="display:flex;justify-content:space-between;align-items:center">Review System Account (optional)<button type="button" class="ebtn" id="rvAccEdit" style="text-transform:none;letter-spacing:0">${accountEditing?'Editing':'Edit credentials'}</button></label>
       <div class="fr" style="gap:10px">
-        <div class="fg" style="flex:1;margin-bottom:0"><input class="fi" id="rvAccUser" value="${esc(r.account?.username||'')}" placeholder="Username / email"></div>
-        <div class="fg" style="flex:1;margin-bottom:0;position:relative"><input class="fi" id="rvAccPass" type="password" value="${esc(r.account?.password||'')}" placeholder="Password"><button type="button" onclick="toggleFormPwd('rvAccPass')" style="position:absolute;right:8px;top:28px;background:none;border:none;cursor:pointer;font-size:12px;color:var(--t3)">👁️</button></div>
+        <div class="fg" style="flex:1;margin-bottom:0"><input class="fi" id="rvAccUser" value="${esc(r.account?.username||'')}" placeholder="Username / email" autocomplete="off" data-1p-ignore="true" data-lpignore="true" ${accountEditing?'':'disabled'}></div>
+        <div class="fg" style="flex:1;margin-bottom:0;position:relative"><input class="fi" id="rvAccPass" type="password" value="${esc(r.account?.password||'')}" placeholder="Password" autocomplete="new-password" data-1p-ignore="true" data-lpignore="true" ${accountEditing?'':'disabled'}><button type="button" onclick="toggleFormPwd('rvAccPass')" ${accountEditing?'':'disabled'} style="position:absolute;right:8px;top:28px;background:none;border:none;cursor:pointer;font-size:12px;color:var(--t3)">👁️</button></div>
       </div>
     </div>
 
@@ -1729,8 +1775,9 @@ function showReviewForm(isN){
     </div>
     </div><div class="mf">${!isN?'<button class="bdel" id="fDl">🗑 Delete</button>':'<div></div>'}<div style="display:flex;gap:6px"><button class="bcan" id="fCa">Cancel</button><button class="bsav rev" id="fSv">${isN?'Add':'Save'}</button></div></div></div>`;
 
-    ov.onclick=e=>{if(e.target===ov){editing=null;rmF();render()}};
-    document.getElementById('fX').onclick=document.getElementById('fCa').onclick=()=>{editing=null;rmF();render()};
+    ov.onclick=e=>{if(e.target===ov)e.stopPropagation()};
+    document.getElementById('fX').onclick=document.getElementById('fCa').onclick=()=>closeWithoutSaving();
+    document.getElementById('rvAccEdit').onclick=()=>{syncR();accountEditing=true;rf()};
 
     document.getElementById('evA').onclick=()=>{
       const l=document.getElementById('evL').value.trim();if(!l)return;
@@ -1777,11 +1824,19 @@ function showReviewForm(isN){
       r.notes=document.getElementById('rvN')?.value||'';
       const accUser=document.getElementById('rvAccUser');
       const accPass=document.getElementById('rvAccPass');
-      if(accUser&&accPass){
+      if(accountEditing&&accUser&&accPass){
         if(!r.account)r.account={};
         r.account.username=accUser.value;
         r.account.password=accPass.value;
       }
+    }
+
+    function closeWithoutSaving(){
+      syncR();
+      const workChanged=(document.getElementById('rvWk')?.value||'')!==(initialDraft.reviewWorkId||'');
+      const pendingInput=Boolean(document.getElementById('evL')?.value.trim()||document.getElementById('evN')?.value.trim());
+      if((!sameMergeValue(r,initialDraft)||workChanged||pendingInput)&&!confirm('Discard the unsaved changes in this editor?'))return;
+      editing=null;rmF();render();
     }
   }
   rf();setTimeout(()=>document.getElementById('rvJ')?.focus(),80);
@@ -1855,7 +1910,7 @@ async function init(){
   }
 }
 window.addEventListener('beforeunload',event=>{
-  if(storageState==='saving'){event.preventDefault();event.returnValue=''}
+  if(editing||storageState==='saving'){event.preventDefault();event.returnValue=''}
 });
 init();
 </script>
