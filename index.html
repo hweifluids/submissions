@@ -351,6 +351,95 @@ function sortTimelineEvents(events,descending=false){
 }
 // END TIMELINE SORT HELPERS
 
+// BEGIN DATA MERGE HELPERS
+const MERGE_MISSING=Symbol('merge-missing');
+function cloneMergeValue(value){
+  if(value===MERGE_MISSING)return MERGE_MISSING;
+  return value===undefined?undefined:JSON.parse(JSON.stringify(value));
+}
+function sameMergeValue(a,b){
+  if(a===b)return true;
+  if(a===MERGE_MISSING||b===MERGE_MISSING)return false;
+  if(Array.isArray(a)||Array.isArray(b)){
+    return Array.isArray(a)&&Array.isArray(b)&&a.length===b.length&&a.every((value,index)=>sameMergeValue(value,b[index]));
+  }
+  if(a&&b&&typeof a==='object'&&typeof b==='object'){
+    const aKeys=Object.keys(a).sort();
+    const bKeys=Object.keys(b).sort();
+    return aKeys.length===bKeys.length&&aKeys.every((key,index)=>key===bKeys[index]&&sameMergeValue(a[key],b[key]));
+  }
+  return false;
+}
+function mergeStringSet(base,local,remote){
+  const baseSet=new Set(Array.isArray(base)?base:[]);
+  const localSet=new Set(Array.isArray(local)?local:[]);
+  const remoteSet=new Set(Array.isArray(remote)?remote:[]);
+  const order=[...remoteSet,...localSet,...baseSet];
+  return [...new Set(order)].filter(value=>{
+    const inBase=baseSet.has(value),inLocal=localSet.has(value),inRemote=remoteSet.has(value);
+    if(inLocal===inRemote)return inLocal;
+    return inLocal===inBase?inRemote:inLocal;
+  });
+}
+function indexMergeRecords(records){
+  const map=new Map(),order=[];
+  (Array.isArray(records)?records:[]).forEach((record,index)=>{
+    const key=record&&record.id?String(record.id):`__index_${index}`;
+    map.set(key,record);order.push(key);
+  });
+  return{map,order};
+}
+function mergeRecordCollection(base,local,remote,path,conflicts){
+  const baseIndex=indexMergeRecords(base),localIndex=indexMergeRecords(local),remoteIndex=indexMergeRecords(remote);
+  const order=[...remoteIndex.order,...localIndex.order,...baseIndex.order];
+  const merged=[];
+  [...new Set(order)].forEach(key=>{
+    const baseValue=baseIndex.map.has(key)?baseIndex.map.get(key):MERGE_MISSING;
+    const localValue=localIndex.map.has(key)?localIndex.map.get(key):MERGE_MISSING;
+    const remoteValue=remoteIndex.map.has(key)?remoteIndex.map.get(key):MERGE_MISSING;
+    const value=mergeEditableValue(baseValue,localValue,remoteValue,`${path}[${key}]`,conflicts);
+    if(value!==MERGE_MISSING)merged.push(value);
+  });
+  return merged;
+}
+function mergeEditableValue(base,local,remote,path,conflicts){
+  if(sameMergeValue(local,remote))return cloneMergeValue(local);
+  if(sameMergeValue(local,base))return cloneMergeValue(remote);
+  if(sameMergeValue(remote,base))return cloneMergeValue(local);
+
+  if(Array.isArray(local)&&Array.isArray(remote)){
+    if(path==='labels'||path.endsWith('.tags'))return mergeStringSet(base,local,remote);
+    if(path.endsWith('.timeline'))return mergeRecordCollection(base,local,remote,path,conflicts);
+    conflicts.push(path);return cloneMergeValue(local);
+  }
+  if(local&&remote&&typeof local==='object'&&typeof remote==='object'&&!Array.isArray(local)&&!Array.isArray(remote)){
+    const baseObject=base&&typeof base==='object'&&!Array.isArray(base)?base:{};
+    const result={};
+    const keys=new Set([...Object.keys(baseObject),...Object.keys(remote),...Object.keys(local)]);
+    keys.forEach(key=>{
+      const baseValue=Object.hasOwn(baseObject,key)?baseObject[key]:MERGE_MISSING;
+      const localValue=Object.hasOwn(local,key)?local[key]:MERGE_MISSING;
+      const remoteValue=Object.hasOwn(remote,key)?remote[key]:MERGE_MISSING;
+      const value=mergeEditableValue(baseValue,localValue,remoteValue,path?`${path}.${key}`:key,conflicts);
+      if(value!==MERGE_MISSING)result[key]=value;
+    });
+    return result;
+  }
+  conflicts.push(path);return cloneMergeValue(local);
+}
+function mergeEditableSnapshots(base,local,remote){
+  const conflicts=[];
+  const baseData=base||{},localData=local||{},remoteData=remote||{};
+  const snapshot={
+    version:mergeEditableValue(baseData.version,localData.version,remoteData.version,'version',conflicts),
+    papers:mergeRecordCollection(baseData.papers,localData.papers,remoteData.papers,'papers',conflicts),
+    reviews:mergeRecordCollection(baseData.reviews,localData.reviews,remoteData.reviews,'reviews',conflicts),
+    labels:mergeStringSet(baseData.labels,localData.labels,remoteData.labels)
+  };
+  return{snapshot,conflicts:[...new Set(conflicts)]};
+}
+// END DATA MERGE HELPERS
+
 const normalizePaperStatus=k=>k==='submitted'?'with_editor':k;
 const normalizeTimelineRecord=record=>({...record,timeline:sortTimelineEvents(record?.timeline)});
 const normalizePaperRecord=p=>normalizeTimelineRecord({...p,status:normalizePaperStatus(p.status)});
@@ -403,6 +492,7 @@ let storageMessage='Connecting to the local backend';
 let saveTail=Promise.resolve();
 let saveRevision=0;
 let serverRevision=0;
+let baseSnapshot={version:DATA_VERSION,papers:[],reviews:[],labels:[...DEF_LABELS]};
 let csrfToken='';
 
 function storageStatusHTML(){
@@ -431,8 +521,23 @@ function legacyLocalData(){
     };
   }catch{return{papers:[],reviews:[],labels:[...DEF_LABELS]}}
 }
-async function loadL(){
-  setStorageState('loading','Reading data/app-data.json');
+function editableSnapshotFromData(data){
+  return cloneMergeValue({
+    version:String(data?.version||DATA_VERSION),
+    papers:Array.isArray(data?.papers)?data.papers.map(normalizePaperRecord):[],
+    reviews:Array.isArray(data?.reviews)?data.reviews.map(normalizeTimelineRecord):[],
+    labels:Array.isArray(data?.labels)?[...data.labels]:[...DEF_LABELS]
+  });
+}
+function applyBackendData(data){
+  const snapshot=editableSnapshotFromData(data);
+  papers=snapshot.papers;
+  reviews=snapshot.reviews;
+  labels=snapshot.labels;
+  serverRevision=Number.isInteger(data?.dataRevision)?data.dataRevision:serverRevision;
+  baseSnapshot=cloneMergeValue(snapshot);
+}
+async function fetchBackendData(){
   const response=await fetch(DATA_API,{cache:'no-store',credentials:'include'});
   if(!response.ok){
     const detail=await response.json().catch(()=>({}));
@@ -440,11 +545,27 @@ async function loadL(){
     error.status=response.status;
     throw error;
   }
-  const data=await response.json();
-  papers=Array.isArray(data.papers)?data.papers.map(normalizePaperRecord):[];
-  reviews=Array.isArray(data.reviews)?data.reviews.map(normalizeTimelineRecord):[];
-  labels=Array.isArray(data.labels)?data.labels:[...DEF_LABELS];
-  serverRevision=Number.isInteger(data.dataRevision)?data.dataRevision:0;
+  return response.json();
+}
+async function writeBackendData(snapshot,baseRevision){
+  const body=JSON.stringify({...snapshot,baseRevision});
+  const response=await fetch(DATA_API,{method:'PUT',credentials:'include',headers:{'Content-Type':'application/json','X-CSRF-Token':csrfToken},body});
+  if(!response.ok){
+    const detail=await response.json().catch(()=>({}));
+    const error=new Error(detail.error||`Backend returned HTTP ${response.status}`);
+    error.status=response.status;
+    throw error;
+  }
+  return response.json();
+}
+function conflictDescription(paths){
+  const fields=[...new Set((paths||[]).map(path=>path.split('.').pop()).filter(Boolean))];
+  return fields.slice(0,3).join(', ')+(fields.length>3?`, +${fields.length-3} more`:``);
+}
+async function loadL(){
+  setStorageState('loading','Reading data/app-data.json');
+  const data=await fetchBackendData();
+  applyBackendData(data);
 
   const migrationKey='pt_backend_migrated_v1';
   const legacy=legacyLocalData();
@@ -462,23 +583,42 @@ async function loadL(){
   }
   setStorageState('saved',data.updatedAt?`Backend data updated: ${data.updatedAt}`:'Backend data file connected');
 }
-function saveL(){
-  const orderedPapers=papers.map(normalizePaperRecord);
-  const orderedReviews=reviews.map(normalizeTimelineRecord);
-  const snapshot=JSON.parse(JSON.stringify({version:DATA_VERSION,papers:orderedPapers,reviews:orderedReviews,labels}));
+function saveL(options={}){
+  const snapshot=editableSnapshotFromData(options.snapshot||{version:DATA_VERSION,papers,reviews,labels});
+  const confirmConflicts=Boolean(options.confirmConflicts);
   const revision=++saveRevision;
   setStorageState('saving','Writing data/app-data.json');
   const write=saveTail.then(async()=>{
-    const body=JSON.stringify({...snapshot,baseRevision:serverRevision});
-    const response=await fetch(DATA_API,{method:'PUT',credentials:'include',headers:{'Content-Type':'application/json','X-CSRF-Token':csrfToken},body});
-    if(!response.ok){
-      const detail=await response.json().catch(()=>({}));
-      const error=new Error(detail.error||`Backend returned HTTP ${response.status}`);
-      error.status=response.status;
-      throw error;
+    const mergeBase=cloneMergeValue(baseSnapshot);
+    let outgoing=snapshot;
+    let data;
+    try{
+      data=await writeBackendData(outgoing,serverRevision);
+    }catch(error){
+      if(error.status!==409)throw error;
+      const latest=await fetchBackendData();
+      const remoteSnapshot=editableSnapshotFromData(latest);
+      const merged=mergeEditableSnapshots(mergeBase,outgoing,remoteSnapshot);
+      if(merged.conflicts.length){
+        const fields=conflictDescription(merged.conflicts);
+        const shouldOverwrite=confirmConflicts&&window.confirm(`The same ${fields||'data'} changed in another browser. Keep the values in this edit and overwrite those conflicting fields?`);
+        if(!shouldOverwrite){
+          const conflict=new Error(`Another browser changed ${fields||'the same fields'}. Your draft is still open and has not been overwritten.`);
+          conflict.status=409;
+          conflict.conflicts=merged.conflicts;
+          throw conflict;
+        }
+      }
+      outgoing=merged.snapshot;
+      const latestRevision=Number.isInteger(latest.dataRevision)?latest.dataRevision:0;
+      try{
+        data=await writeBackendData(outgoing,latestRevision);
+      }catch(retryError){
+        if(retryError.status===409)retryError.message='Data changed again while resolving the conflict. Your draft is still open; please save once more.';
+        throw retryError;
+      }
     }
-    const data=await response.json();
-    serverRevision=Number.isInteger(data.dataRevision)?data.dataRevision:serverRevision+1;
+    applyBackendData(data);
     return data;
   });
   saveTail=write.catch(()=>{});
@@ -487,8 +627,7 @@ function saveL(){
   }).catch(error=>{
     if(revision===saveRevision)setStorageState('error',error.message);
     if(error.status===409){
-      toast('Newer data exists in another tab. Reloading the latest version…','error');
-      setTimeout(()=>window.location.reload(),1200);
+      toast(error.message||'Newer data exists elsewhere. Your unsaved edit remains on this page.','error');
     }else if(error.status===401){
       csrfToken='';
       renderLogin('Your session expired. Enter the password again.');
@@ -498,7 +637,7 @@ function saveL(){
   });
   return write;
 }
-function persist(){const write=saveL();render();return write}
+function persist(){const write=saveL();render();write.then(()=>{if(!editing)render()}).catch(()=>{});return write}
 function toast(m,type='success'){
   document.querySelectorAll('.toast').forEach(t=>t.remove());
   const t=document.createElement('div');
@@ -1493,7 +1632,7 @@ function showPaperForm(isN){
 
     document.querySelectorAll('.go').forEach(g=>{g.onclick=()=>{sync();if(!isN){const idx=papers.findIndex(x=>x.id===p.id);if(idx>=0)papers[idx]=p;saveL()}editing=null;rmF();detailId=g.dataset.goid;render()}});
 
-    document.getElementById('fSv').onclick=()=>{
+    document.getElementById('fSv').onclick=async()=>{
       sync();if(!p.title.trim()){toast('Please enter a title','error');return}
       const wkVal=document.getElementById('fWk').value;
       if(wkVal==='__new__'){p.workId=uid()}
@@ -1501,8 +1640,18 @@ function showPaperForm(isN){
       else{p.workId=''}
 
       p.id=p.id||uid();
-      if(isN)papers.push(p);else{const idx=papers.findIndex(x=>x.id===p.id);if(idx>=0)papers[idx]=p}
-      editing=null;rmF();persist();
+      const draft=editableSnapshotFromData({version:DATA_VERSION,papers,reviews,labels});
+      const idx=draft.papers.findIndex(x=>x.id===p.id);
+      if(idx>=0)draft.papers[idx]=cloneMergeValue(p);else draft.papers.push(cloneMergeValue(p));
+      const button=document.getElementById('fSv');
+      button.disabled=true;button.textContent='Saving…';
+      editing=p;
+      try{
+        await saveL({snapshot:draft,confirmConflicts:true});
+        editing=null;rmF();render();
+      }catch{
+        button.disabled=false;button.textContent=isN?'Add':'Save';
+      }
     };
     const dl=document.getElementById('fDl');if(dl)dl.onclick=()=>{if(confirm('Delete this submission?')){papers=papers.filter(x=>x.id!==p.id);editing=null;rmF();persist()}};
 
@@ -1591,7 +1740,7 @@ function showReviewForm(isN){
     };
     document.querySelectorAll('.del-ev').forEach(b=>{b.onclick=()=>{r.timeline=r.timeline.filter(ev=>ev.id!==b.dataset.evid);syncR();rf()}});
 
-    document.getElementById('fSv').onclick=()=>{
+    document.getElementById('fSv').onclick=async()=>{
       syncR();
       if(!r.journal.trim()){toast('Please enter a journal name','error');return}
       r.status=r.decision?'completed':'pending';
@@ -1602,8 +1751,18 @@ function showReviewForm(isN){
       else{r.reviewWorkId=''}
 
       r.id=r.id||uid();
-      if(isN)reviews.push(r);else{const idx=reviews.findIndex(x=>x.id===r.id);if(idx>=0)reviews[idx]=r}
-      editing=null;rmF();persist();
+      const draft=editableSnapshotFromData({version:DATA_VERSION,papers,reviews,labels});
+      const idx=draft.reviews.findIndex(x=>x.id===r.id);
+      if(idx>=0)draft.reviews[idx]=cloneMergeValue(r);else draft.reviews.push(cloneMergeValue(r));
+      const button=document.getElementById('fSv');
+      button.disabled=true;button.textContent='Saving…';
+      editing=r;
+      try{
+        await saveL({snapshot:draft,confirmConflicts:true});
+        editing=null;rmF();render();
+      }catch{
+        button.disabled=false;button.textContent=isN?'Add':'Save';
+      }
     };
     const dl=document.getElementById('fDl');if(dl)dl.onclick=()=>{if(confirm('Delete this review?')){reviews=reviews.filter(x=>x.id!==r.id);editing=null;rmF();persist()}};
 
