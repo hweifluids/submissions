@@ -294,7 +294,7 @@ const RV_ST=[{key:'pending',label:'Pending',emoji:'⏳',color:'#f59e0b'},{key:'c
 const RV_DEC=[{key:'',label:'Undecided',emoji:'🤔',color:'#9ca3af'},{key:'accept',label:'Accept',emoji:'🎉',color:'#22c55e'},{key:'minor',label:'Minor Revision',emoji:'🔧',color:'#3b82f6'},{key:'major',label:'Major Revision',emoji:'🔨',color:'#f59e0b'},{key:'reject',label:'Reject',emoji:'❌',color:'#ef4444'}];
 // Preset peer-review events.
 const RV_EVENTS=['Invitation Received','Invitation Accepted','Review Started','Review Submitted','Re-review','Completed'];
-const DEF_LABELS=['Submitted','With Editor','Correspondence Letter','Under Review','Review Complete','Minor Revision','Major Revision','Revision Requested','Revision Submitted','Accepted','Rejected','Withdrawn','Decision Pending','Proof Received','Published'];
+const DEF_LABELS=['Submitted','Correspondence Letter','Under Review','Review Complete','Minor Revision','Major Revision','Revision Requested','Revision Submitted','Accepted','Rejected','Withdrawn','Decision Pending','Proof Received','Published'];
 
 // BEGIN TIMELINE SORT HELPERS
 function timelineEventJournal(event){
@@ -348,6 +348,54 @@ function sortTimelineEvents(events,descending=false){
     start=end;
   }
   return ordered;
+}
+function normalizeTimelineLabel(value){
+  const label=typeof value==='string'?value:value?.label;
+  return String(label||'').trim().toLowerCase().replace(/\s+/g,' ');
+}
+function timelineStatusForEvent(event){
+  const statusByLabel={
+    'submitted':'with_editor','resubmit':'with_editor','resubmitted':'with_editor',
+    'under review':'under_review',
+    'minor revision':'revision','major revision':'revision','revision requested':'revision',
+    'revision submitted':'revision_under_review','revision under review':'revision_under_review',
+    'accepted':'accepted','rejected':'rejected','withdrawn':'withdrawn'
+  };
+  return statusByLabel[normalizeTimelineLabel(event)]||'';
+}
+function latestMappedTimelineStatus(events){
+  let status='';
+  sortTimelineEvents(events).forEach(event=>{const mapped=timelineStatusForEvent(event);if(mapped)status=mapped});
+  return status;
+}
+function isActiveSubmissionStatus(status){
+  const normalized=status==='submitted'?'with_editor':status;
+  return['with_editor','under_review','revision','revision_under_review'].includes(normalized);
+}
+function submissionAttemptEventsForTimeline(events){
+  const attempts=[];
+  let attemptOpen=false;
+  sortTimelineEvents(events).forEach(event=>{
+    const label=normalizeTimelineLabel(event);
+    if(['submitted','resubmit','resubmitted'].includes(label)){
+      if(!attemptOpen){attempts.push(event);attemptOpen=true}
+      return;
+    }
+    if(['accepted','rejected','withdrawn'].includes(label))attemptOpen=false;
+  });
+  return attempts;
+}
+const countSubmissionAttempts=items=>(items||[]).reduce((total,item)=>total+submissionAttemptEventsForTimeline(item.timeline).length,0);
+function countSubmissionAttemptsByMonth(items){
+  const counts={};
+  (items||[]).forEach(item=>{
+    submissionAttemptEventsForTimeline(item.timeline).forEach(event=>{
+      const month=String(event.date||'').slice(0,7);
+      if(!/^\d{4}-\d{2}$/.test(month))return;
+      counts[month]=(counts[month]||0)+1;
+    });
+  });
+  return counts;
 }
 // END TIMELINE SORT HELPERS
 
@@ -979,8 +1027,9 @@ function renderDashboard(data){
   const isPapers=mainTab==='papers';
   let h='<div class="dash">';
   if(isPapers){
-    const total=data.length;
-    const active=data.filter(p=>!['accepted','rejected','withdrawn'].includes(p.status)).length;
+    const attempts=countSubmissionAttempts(data);
+    const active=data.filter(p=>isActiveSubmissionStatus(p.status)).length;
+    const preparing=data.filter(p=>normalizePaperStatus(p.status)==='preparing').length;
     const acc=countTimelineEvents(data,'Accepted');
     const rej=countTimelineEvents(data,'Rejected');
     const avgP=data.filter(p=>p.submittedDate&&['accepted','rejected'].includes(p.status)&&p.timeline&&p.timeline.length>1);
@@ -989,9 +1038,10 @@ function renderDashboard(data){
     const workIds=new Set(data.filter(p=>p.workId).map(p=>p.workId));
     const uniqueWorks=workIds.size+(data.filter(p=>!p.workId).length);
     h+=`
-      <div class="dash-c"><div class="num">${total}</div><div class="lbl">Submission Attempts</div></div>
       <div class="dash-c"><div class="num">${uniqueWorks}</div><div class="lbl">Manuscripts</div></div>
-      <div class="dash-c"><div class="num">${active}</div><div class="lbl">In Progress</div></div>
+      <div class="dash-c"><div class="num">${attempts}</div><div class="lbl">Submission Attempts</div></div>
+      <div class="dash-c"><div class="num">${active}</div><div class="lbl">Active Submissions</div></div>
+      <div class="dash-c"><div class="num" style="color:#6366f1">${preparing}</div><div class="lbl">Preparing</div></div>
       <div class="dash-c"><div class="num" style="color:#22c55e">${acc}</div><div class="lbl">Acceptance Events</div></div>
       <div class="dash-c"><div class="num" style="color:#ef4444">${rej}</div><div class="lbl">Rejection Events</div></div>
       <div class="dash-c"><div class="num">${avg||'—'}</div><div class="lbl">Avg. Review Days</div></div>
@@ -1073,9 +1123,9 @@ function drawCharts(data){
   Chart.defaults.font.family="'Inter',sans-serif";
   Chart.defaults.font.size=11;
 
-  const activityByMonth={};
-  data.forEach(x=>{
-    const d=x.submittedDate||x.inviteDate;
+  const activityByMonth=isPapers?countSubmissionAttemptsByMonth(data):{};
+  if(!isPapers)data.forEach(x=>{
+    const d=x.inviteDate;
     if(!d)return;
     const k=d.slice(0,7);
     activityByMonth[k]=(activityByMonth[k]||0)+1;
@@ -1649,9 +1699,15 @@ function showPaperForm(isN){
     document.getElementById('evA').onclick=()=>{
       const l=document.getElementById('evL').value.trim();if(!l)return;
       if(!p.timeline)p.timeline=[];
-      const st2=ST.find(s=>s.label===l);
-      p.timeline.push({id:uid(),date:document.getElementById('evD').value,label:l,color:st2?st2.color:'#94a3b8',note:document.getElementById('evN').value.trim()});
+      const mappedStatus=timelineStatusForEvent(l);
+      const st2=ST.find(s=>s.key===mappedStatus)||ST.find(s=>s.label===l);
+      const event={id:uid(),date:document.getElementById('evD').value,label:l,color:st2?st2.color:'#94a3b8',note:document.getElementById('evN').value.trim()};
+      p.timeline.push(event);
       if(!draftLabels.includes(l))draftLabels.push(l);
+      if(mappedStatus){
+        const latestStatus=latestMappedTimelineStatus(p.timeline);
+        if(latestStatus){p.status=latestStatus;if(p.status!=='revision')p.deadline=''}
+      }
       sync();rf();
     };
     document.querySelectorAll('.del-ev').forEach(b=>{b.onclick=()=>{p.timeline=p.timeline.filter(ev=>ev.id!==b.dataset.evid);sync();rf()}});
