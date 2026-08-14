@@ -89,10 +89,11 @@ body{font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;background:
 .rtag{display:inline-block;padding:2px 7px;border-radius:4px;font-size:10px;font-weight:700;white-space:nowrap;flex-shrink:0}
 .cjn{font-size:11.5px;color:var(--t2);margin-bottom:7px;display:flex;align-items:center;gap:5px;flex-wrap:wrap}
 .cjn-title{font-style:italic;min-width:0}
-.jm-flags{display:inline-flex;align-items:center;gap:3px;flex-shrink:0}
-.jm-flag{display:inline-flex;align-items:center;justify-content:center;padding:1px 5px;border-radius:4px;font-size:9px;font-style:normal;font-weight:800;line-height:1.35;letter-spacing:.05px;border:1px solid transparent}
-.jm-flag.q{color:#6d28d9;background:#f5f3ff;border-color:#ddd6fe}
-.jm-flag.jif{color:#0369a1;background:#f0f9ff;border-color:#bae6fd}
+.jm-flags{display:inline-flex;align-items:center;gap:2px;flex-shrink:0}
+.jm-flag{display:inline-flex;align-items:center;justify-content:center;padding:0 3px;border-radius:3px;font-size:8px;font-style:normal;font-weight:800;line-height:1.3;letter-spacing:.05px;border:1px solid transparent}
+.jm-flag.tone-red{color:#dc2626;background:#fef2f2;border-color:#fca5a5}
+.jm-flag.tone-purple{color:#6d28d9;background:#f5f3ff;border-color:#ddd6fe}
+.jm-flag.tone-blue{color:#0369a1;background:#f0f9ff;border-color:#bae6fd}
 .sbdg{display:inline-block;padding:2px 7px;border-radius:4px;font-size:10px;font-weight:700;white-space:nowrap;flex-shrink:0}
 .cbot{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:5px}
 .qbs{display:flex;gap:3px;flex-wrap:wrap}
@@ -555,9 +556,23 @@ function journalMetricForJournal(journal,preferredMetric=null){
   for(const paper of papers){const metric=normalizedJournalMetric(paper.journalMetric,journal);if(metric)return metric}
   return null;
 }
+function journalQuartileTone(quartile){
+  const value=String(quartile||'').toUpperCase();
+  if(value==='Q1')return'tone-red';
+  if(value==='Q2')return'tone-purple';
+  if(value==='Q3'||value==='Q4')return'tone-blue';
+  return'';
+}
+function journalImpactFactorTone(impactFactor){
+  const raw=String(impactFactor??'').trim();if(!raw)return'';
+  const value=Number(raw);if(!Number.isFinite(value))return'';
+  if(value>8)return'tone-red';
+  if(value>=3)return'tone-purple';
+  return'tone-blue';
+}
 function journalMetricFlags(journal,preferredMetric=null){
   const metric=journalMetricForJournal(journal,preferredMetric);if(!metric)return'';
-  return `<span class="jm-flags">${metric.quartile?`<span class="jm-flag q">${esc(metric.quartile)}</span>`:''}${metric.impactFactor?`<span class="jm-flag jif">${esc(metric.impactFactor)}</span>`:''}</span>`;
+  return `<span class="jm-flags">${metric.quartile?`<span class="jm-flag q ${journalQuartileTone(metric.quartile)}">${esc(metric.quartile)}</span>`:''}${metric.impactFactor?`<span class="jm-flag jif ${journalImpactFactorTone(metric.impactFactor)}">${esc(metric.impactFactor)}</span>`:''}</span>`;
 }
 function journalLineHTML(journal,preferredMetric=null){
   if(!journal)return'<span style="opacity:.4;font-style:normal">Journal TBD</span>';
