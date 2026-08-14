@@ -590,7 +590,6 @@ let saveRevision=0;
 let serverRevision=0;
 let baseSnapshot={version:DATA_VERSION,papers:[],reviews:[],labels:[...DEF_LABELS]};
 let csrfToken='';
-let journalLookupDisabled=false;
 let journalMetricRefreshPromise=null;
 let journalMetricRefreshTimer=null;
 
@@ -659,13 +658,9 @@ async function writeBackendData(snapshot,baseRevision){
 }
 const waitFor=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function requestJournalMetric(journal,existingMetric=null){
-  if(journalLookupDisabled||normalizeJournalTitle(journal).length<3)return existingMetric;
+  if(normalizeJournalTitle(journal).length<3)return existingMetric;
   const response=await fetch(`${JOURNAL_RESOLVE_API}?title=${encodeURIComponent(journal)}`,{cache:'no-store',credentials:'include'}).catch(()=>null);
-  if(!response){journalLookupDisabled=true;return existingMetric}
-  if(!response.ok){
-    if([404,429,502,503].includes(response.status))journalLookupDisabled=true;
-    return existingMetric;
-  }
+  if(!response||!response.ok)return existingMetric;
   const data=await response.json().catch(()=>null);if(!data)return existingMetric;
   const checkedAt=new Date().toISOString().replace(/\.\d{3}Z$/,'Z');
   if(data.matched&&journalMetricCacheEntry(data.metric,journal))return{...data.metric,checkedAt};
@@ -679,7 +674,7 @@ async function resolveJournalMetricForJournal(journal,preferredMetric=null){
   return requestJournalMetric(journal,cached);
 }
 async function refreshMissingJournalMetrics(){
-  if(journalLookupDisabled||editing||storageState!=='saved')return;
+  if(editing||storageState!=='saved')return;
   const journals=new Map();
   papers.forEach(p=>{const key=normalizeJournalTitle(p.journal);if(key&&!journals.has(key))journals.set(key,p.journal)});
   const resolved=new Map();
@@ -690,7 +685,6 @@ async function refreshMissingJournalMetrics(){
     else{
       const metric=await requestJournalMetric(journal,cached);
       if(metric)resolved.set(key,metric);
-      if(journalLookupDisabled)break;
       await waitFor(260);
     }
   }
@@ -706,7 +700,7 @@ async function refreshMissingJournalMetrics(){
   if(!editing)render();
 }
 function scheduleJournalMetricRefresh(delay=900){
-  if(journalLookupDisabled||journalMetricRefreshTimer||journalMetricRefreshPromise)return;
+  if(journalMetricRefreshTimer||journalMetricRefreshPromise)return;
   journalMetricRefreshTimer=setTimeout(()=>{
     journalMetricRefreshTimer=null;
     journalMetricRefreshPromise=refreshMissingJournalMetrics().catch(()=>{}).finally(()=>{journalMetricRefreshPromise=null});
