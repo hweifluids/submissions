@@ -89,10 +89,10 @@ body{font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;background:
 .rtag{display:inline-block;padding:2px 7px;border-radius:4px;font-size:10px;font-weight:700;white-space:nowrap;flex-shrink:0}
 .cjn{font-size:11.5px;color:var(--t2);margin-bottom:7px;display:flex;align-items:center;gap:5px;flex-wrap:wrap}
 .cjn-title{font-style:italic;min-width:0}
-.jcr-flags{display:inline-flex;align-items:center;gap:3px;flex-shrink:0}
-.jcr-flag{display:inline-flex;align-items:center;justify-content:center;padding:1px 5px;border-radius:4px;font-size:9px;font-style:normal;font-weight:800;line-height:1.35;letter-spacing:.05px;border:1px solid transparent}
-.jcr-flag.q{color:#6d28d9;background:#f5f3ff;border-color:#ddd6fe}
-.jcr-flag.jif{color:#0369a1;background:#f0f9ff;border-color:#bae6fd}
+.jm-flags{display:inline-flex;align-items:center;gap:3px;flex-shrink:0}
+.jm-flag{display:inline-flex;align-items:center;justify-content:center;padding:1px 5px;border-radius:4px;font-size:9px;font-style:normal;font-weight:800;line-height:1.35;letter-spacing:.05px;border:1px solid transparent}
+.jm-flag.q{color:#6d28d9;background:#f5f3ff;border-color:#ddd6fe}
+.jm-flag.jif{color:#0369a1;background:#f0f9ff;border-color:#bae6fd}
 .sbdg{display:inline-block;padding:2px 7px;border-radius:4px;font-size:10px;font-weight:700;white-space:nowrap;flex-shrink:0}
 .cbot{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:5px}
 .qbs{display:flex;gap:3px;flex-wrap:wrap}
@@ -528,7 +528,7 @@ function normalizeJournalTitle(value){
   return String(value||'').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/&/g,' and ').replace(/[^a-z0-9]+/g,' ').trim().replace(/\s+/g,' ');
 }
 function journalMetricCacheEntry(metric,journal){
-  if(!metric||typeof metric!=='object'||metric.source!=='clarivate-jcr')return null;
+  if(!metric||typeof metric!=='object'||metric.source!=='jcr-mirror')return null;
   const journalKey=normalizeJournalTitle(journal);
   return journalKey&&String(metric.journalKey||'')===journalKey?metric:null;
 }
@@ -557,8 +557,7 @@ function journalMetricForJournal(journal,preferredMetric=null){
 }
 function journalMetricFlags(journal,preferredMetric=null){
   const metric=journalMetricForJournal(journal,preferredMetric);if(!metric)return'';
-  const title=`Clarivate JCR ${metric.jcrYear||''}`.trim();
-  return `<span class="jcr-flags" title="${esc(title)}">${metric.quartile?`<span class="jcr-flag q">${esc(metric.quartile)}</span>`:''}${metric.impactFactor?`<span class="jcr-flag jif">${esc(metric.impactFactor)}</span>`:''}</span>`;
+  return `<span class="jm-flags">${metric.quartile?`<span class="jm-flag q">${esc(metric.quartile)}</span>`:''}${metric.impactFactor?`<span class="jm-flag jif">${esc(metric.impactFactor)}</span>`:''}</span>`;
 }
 function journalLineHTML(journal,preferredMetric=null){
   if(!journal)return'<span style="opacity:.4;font-style:normal">Journal TBD</span>';
@@ -672,7 +671,7 @@ async function requestJournalMetric(journal,existingMetric=null){
   if(data.matched&&journalMetricCacheEntry(data.metric,journal))return{...data.metric,checkedAt};
   const validExisting=normalizedJournalMetric(existingMetric,journal);
   if(validExisting)return{...existingMetric,checkedAt};
-  return{source:'clarivate-jcr',journalKey:normalizeJournalTitle(journal),jcrYear:data.jcrYear||'',unmatched:true,updatedAt:checkedAt,checkedAt};
+  return{source:'jcr-mirror',journalKey:normalizeJournalTitle(journal),metricYear:data.metricYear||'',unmatched:true,updatedAt:checkedAt,checkedAt};
 }
 async function resolveJournalMetricForJournal(journal,preferredMetric=null){
   const cached=cachedJournalMetricForJournal(journal,preferredMetric);
