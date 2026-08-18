@@ -155,13 +155,27 @@ textarea.fi{resize:vertical;min-height:42px}
 .tl-add .fg{margin-bottom:0}
 .tl-list{position:relative;padding-left:16px}
 .tl-list::before{content:'';position:absolute;left:4px;top:3px;bottom:3px;width:2px;background:var(--border);border-radius:1px}
-.tl-ev{position:relative;padding:4px 0 8px 10px;font-size:11.5px}
+.tl-ev{position:relative;padding:4px 72px 8px 10px;font-size:11.5px;min-height:42px}
 .tl-ev .dot{position:absolute;left:-16px;top:7px;width:9px;height:9px;border-radius:50%;border:2px solid var(--card)}
 .tl-ev .date{color:var(--t3);font-size:10px;margin-bottom:1px}
 .tl-ev .label{font-weight:600;color:var(--text)}
 .tl-ev .note{color:var(--t2);font-size:10.5px;margin-top:1px}
-.tl-ev .del-ev{position:absolute;right:0;top:4px;background:none;border:none;font-size:10px;color:var(--t3);cursor:pointer;opacity:0;transition:opacity .15s}
-.tl-ev:hover .del-ev{opacity:1}
+.tl-ev-actions{position:absolute;right:0;top:3px;display:flex;gap:2px}
+.tl-ev-action{width:32px;height:32px;padding:0;border:1px solid transparent;border-radius:5px;background:transparent;color:var(--t3);font-size:12px;cursor:pointer;opacity:.55;transition:opacity .15s,background .15s,border-color .15s}
+.tl-ev:hover .tl-ev-action,.tl-ev-action:focus-visible{opacity:1}
+.tl-ev-action:hover{background:var(--ibg);border-color:var(--border)}
+.tl-ev-action.del-ev:hover{color:#dc2626;background:#fef2f2;border-color:#fecaca}
+.tl-ev-action:disabled{opacity:.25!important;cursor:not-allowed;background:transparent;border-color:transparent;color:var(--t3)}
+.tl-ev-editing{padding-right:0}
+.tl-edit-fields{display:grid;grid-template-columns:105px minmax(120px,1fr) minmax(120px,1fr);gap:6px}
+.tl-edit-fields .fi{padding:5px 7px;font-size:11px}
+.tl-edit-actions{display:flex;justify-content:flex-end;gap:5px;margin-top:6px}
+.tl-edit-actions button{padding:5px 9px;font-size:10.5px}
+.journal-autocomplete{position:relative}
+.journal-suggestions{position:absolute;z-index:30;left:0;right:0;top:calc(100% + 3px);max-height:210px;overflow-y:auto;background:var(--card);border:1px solid var(--border);border-radius:7px;box-shadow:var(--shl);padding:3px}
+.journal-suggestions:empty{display:none}
+.journal-suggestion{display:block;width:100%;padding:7px 8px;border:0;border-radius:5px;background:transparent;color:var(--text);font:inherit;font-size:11.5px;text-align:left;cursor:pointer}
+.journal-suggestion:hover,.journal-suggestion.active{background:#f5f3ff;color:#6d28d9}
 .hist-sec{margin-top:14px;padding-top:12px;border-top:1px solid var(--border)}
 .hist-sec h3{font-size:12.5px;font-weight:700;margin-bottom:8px}
 .hist-item{display:flex;align-items:center;gap:8px;padding:6px 8px;background:var(--ibg);border:1px solid var(--border);border-radius:7px;margin-bottom:5px;font-size:11.5px}
@@ -272,6 +286,7 @@ textarea.fi{resize:vertical;min-height:42px}
 .card-info-stack{display:flex;flex-direction:column;align-items:stretch;gap:6px;width:100%;margin-bottom:6px}
 .card-info-stack .cjn{width:100%;margin-bottom:0}
 .tag-stack{display:flex;align-items:center;justify-content:flex-start;flex-wrap:wrap;gap:4px;width:100%}
+@media(hover:none){.tl-ev-action{opacity:1}}
 @media(max-width:520px){
   .header{padding:20px 14px 16px}.header h1{font-size:18px}
   .tabs,.tb,.ct,.ebar,.backup-bar{padding-left:14px;padding-right:14px}
@@ -280,6 +295,9 @@ textarea.fi{resize:vertical;min-height:42px}
   .hbtn{padding:7px 12px;font-size:11px}.qbs{display:none}
   .dash{grid-template-columns:repeat(auto-fill,minmax(100px,1fr))}
   .tl-add{flex-direction:column}
+  .tl-add .fg{width:100%}
+  .tl-edit-fields{grid-template-columns:1fr}
+  .tl-ev-action{opacity:1}
   .filt-console{flex-direction:column}
   .filt-grp{max-width:100%}
   .chart-container-large{flex-direction:column;height:auto}
@@ -373,6 +391,22 @@ function latestMappedTimelineStatus(events){
   let status='';
   sortTimelineEvents(events).forEach(event=>{const mapped=timelineStatusForEvent(event);if(mapped)status=mapped});
   return status;
+}
+function suggestedTimelineStatusForNewEvent(currentStatus,events,event){
+  if(!timelineStatusForEvent(event))return'';
+  const current=currentStatus==='submitted'?'with_editor':String(currentStatus||'');
+  const before=latestMappedTimelineStatus(events);
+  const after=latestMappedTimelineStatus([...(Array.isArray(events)?events:[]),event]);
+  return after&&after!==before&&after!==current?after:'';
+}
+const timelineLabelsEqual=(left,right)=>normalizeTimelineLabel(left)===normalizeTimelineLabel(right);
+function timelineEventChoices(values,events=[]){
+  const seen=new Set();
+  return[...(values||[]),...(events||[]).map(event=>event?.label)].map(value=>String(value||'').trim()).filter(value=>{
+    const key=normalizeTimelineLabel(value);
+    if(!key||key==='with editor'||seen.has(key))return false;
+    seen.add(key);return true;
+  });
 }
 function isActiveSubmissionStatus(status){
   const normalized=status==='submitted'?'with_editor':status;
@@ -499,6 +533,15 @@ const normalizeTimelineRecord=record=>({...record,timeline:sortTimelineEvents(re
 const normalizePaperRecord=p=>normalizeTimelineRecord({...p,status:normalizePaperStatus(p.status)});
 const gs=k=>ST.find(s=>s.key===normalizePaperStatus(k))||ST[0];
 const statusCategory=k=>normalizePaperStatus(k)==='revision_under_review'?'under_review':normalizePaperStatus(k);
+// BEGIN PAPER STATUS GROUP HELPERS
+function orderPapersWithinStatusGroup(items,groupKey){
+  const copy=Array.isArray(items)?[...items]:[];
+  if(groupKey!=='under_review')return copy;
+  return copy.map((paper,index)=>({paper,index,rank:paper?.status==='revision_under_review'?0:1}))
+    .sort((left,right)=>left.rank-right.rank||left.index-right.index)
+    .map(item=>item.paper);
+}
+// END PAPER STATUS GROUP HELPERS
 const countTimelineEvents=(items,eventLabel)=>items.reduce((total,item)=>total+(item.timeline||[]).filter(event=>String(event.label||'').trim().toLowerCase()===eventLabel.toLowerCase()).length,0);
 function countTimelineEventsByMonth(items,eventLabel){
   const counts={};
@@ -518,6 +561,12 @@ const grv=k=>RV_ST.find(s=>s.key===k)||RV_ST[0];
 const gdec=k=>RV_DEC.find(d=>d.key===(k||''))||RV_DEC[0];
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,7);
 const esc=s=>{const d=document.createElement('div');d.textContent=s;return d.innerHTML};
+// BEGIN HTML ATTRIBUTE HELPERS
+function escAttr(value){
+  const escaped={'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'};
+  return String(value??'').replace(/[&<>"']/g,character=>escaped[character]);
+}
+// END HTML ATTRIBUTE HELPERS
 const fD=d=>{if(!d)return'';const p=d.split('-');return p.length===3?p[0]+'/'+p[1]+'/'+p[2]:d};
 const statusDisplayLabel=p=>p.status==='revision'&&p.deadline?`${gs(p.status).label} (${fD(p.deadline)})`:gs(p.status).label;
 const roleDisplayLabel=p=>p.role==='other'&&Number(p.authorPosition)>0?`${gr(p.role).label} (${Math.trunc(Number(p.authorPosition))})`:gr(p.role).label;
@@ -587,6 +636,7 @@ const API_BASE=IS_LOCAL_BACKEND?'':REMOTE_API_BASE;
 const apiEndpoint=path=>`${API_BASE}${path}`;
 const DATA_API=apiEndpoint('/api/data');
 const JOURNAL_RESOLVE_API=apiEndpoint('/api/journals/resolve');
+const JOURNAL_SUGGEST_API=apiEndpoint('/api/journals/suggest');
 const DATA_VERSION='2026V4';
 
 let papers=[], reviews=[];
@@ -607,6 +657,7 @@ let baseSnapshot={version:DATA_VERSION,papers:[],reviews:[],labels:[...DEF_LABEL
 let csrfToken='';
 let journalMetricRefreshPromise=null;
 let journalMetricRefreshTimer=null;
+const journalSuggestionCache=new Map();
 
 function storageStatusHTML(){
   const text={loading:'Connecting to backend',saving:'Writing data file',saved:'Connected',error:'Backend save failed'}[storageState]||'Unknown storage status';
@@ -720,6 +771,90 @@ function scheduleJournalMetricRefresh(delay=900){
     journalMetricRefreshTimer=null;
     journalMetricRefreshPromise=refreshMissingJournalMetrics().catch(()=>{}).finally(()=>{journalMetricRefreshPromise=null});
   },delay);
+}
+function journalSuggestionRank(query,name){
+  const queryKey=normalizeJournalTitle(query),nameKey=normalizeJournalTitle(name);
+  if(!queryKey||!nameKey)return-1;
+  if(nameKey===queryKey)return 0;
+  if(nameKey.startsWith(queryKey))return 1;
+  if(nameKey.split(' ').some(word=>word.startsWith(queryKey)))return 2;
+  if(nameKey.includes(queryKey))return 3;
+  const queryWords=queryKey.split(' '),nameWords=nameKey.split(' ');
+  return queryWords.every(queryWord=>nameWords.some(nameWord=>nameWord.startsWith(queryWord)))?4:-1;
+}
+function uniqueJournalSuggestionNames(names,limit=8){
+  const seen=new Set(),result=[];
+  for(const value of names||[]){
+    const name=String(value?.name??value??'').trim(),key=normalizeJournalTitle(name);
+    if(!key||seen.has(key))continue;
+    seen.add(key);result.push(name);
+    if(result.length>=limit)break;
+  }
+  return result;
+}
+function localJournalSuggestions(query,limit=8){
+  const names=[];
+  papers.forEach(p=>{names.push(p.journal,p.journalMetric?.journalTitle)});
+  reviews.forEach(r=>names.push(r.journal));
+  return uniqueJournalSuggestionNames(names,100).map((name,index)=>({name,index,rank:journalSuggestionRank(query,name)}))
+    .filter(item=>item.rank>=0)
+    .sort((left,right)=>left.rank-right.rank||left.name.length-right.name.length||left.index-right.index)
+    .slice(0,limit).map(item=>item.name);
+}
+async function requestJournalSuggestions(query,signal){
+  const key=normalizeJournalTitle(query);if(key.length<2)return[];
+  if(journalSuggestionCache.has(key))return[...journalSuggestionCache.get(key)];
+  try{
+    const response=await fetch(`${JOURNAL_SUGGEST_API}?q=${encodeURIComponent(query)}&limit=8`,{cache:'no-store',credentials:'include',signal});
+    if(!response.ok)return[];
+    const data=await response.json();
+    const names=uniqueJournalSuggestionNames(data?.suggestions||[]);
+    journalSuggestionCache.set(key,names);
+    return[...names];
+  }catch{return[]}
+}
+function setupJournalAutocomplete(inputId){
+  const input=document.getElementById(inputId);if(!input)return;
+  const host=input.parentElement;host.classList.add('journal-autocomplete');
+  const menu=document.createElement('div');menu.className='journal-suggestions';menu.id=`${inputId}-suggestions`;menu.setAttribute('role','listbox');host.appendChild(menu);
+  input.setAttribute('autocomplete','off');input.setAttribute('aria-autocomplete','list');input.setAttribute('aria-controls',menu.id);input.setAttribute('aria-expanded','false');
+  let timer=null,controller=null,activeIndex=-1,currentNames=[];
+  const close=()=>{menu.replaceChildren();currentNames=[];activeIndex=-1;input.setAttribute('aria-expanded','false')};
+  const setActive=index=>{
+    const buttons=[...menu.querySelectorAll('.journal-suggestion')];
+    if(!buttons.length){activeIndex=-1;return}
+    activeIndex=(index+buttons.length)%buttons.length;
+    buttons.forEach((button,buttonIndex)=>button.classList.toggle('active',buttonIndex===activeIndex));
+    buttons[activeIndex].scrollIntoView({block:'nearest'});
+  };
+  const choose=name=>{input.value=name;input.dispatchEvent(new Event('change',{bubbles:true}));close();input.focus()};
+  const show=names=>{
+    currentNames=uniqueJournalSuggestionNames(names);activeIndex=-1;menu.replaceChildren();
+    currentNames.forEach(name=>{
+      const button=document.createElement('button');button.type='button';button.className='journal-suggestion';button.setAttribute('role','option');button.textContent=name;
+      button.onpointerdown=event=>event.preventDefault();button.onclick=()=>choose(name);menu.appendChild(button);
+    });
+    input.setAttribute('aria-expanded',String(currentNames.length>0));
+  };
+  const update=()=>{
+    const query=input.value.trim(),local=localJournalSuggestions(query);show(local);
+    if(timer)clearTimeout(timer);if(controller)controller.abort();
+    if(normalizeJournalTitle(query).length<2)return;
+    timer=setTimeout(async()=>{
+      controller=new AbortController();
+      const remote=await requestJournalSuggestions(query,controller.signal);
+      if(document.getElementById(inputId)!==input||input.value.trim()!==query)return;
+      show(uniqueJournalSuggestionNames([...local,...remote]));
+    },240);
+  };
+  input.addEventListener('focus',update);input.addEventListener('input',update);
+  input.addEventListener('blur',()=>setTimeout(close,120));
+  input.addEventListener('keydown',event=>{
+    if(event.key==='ArrowDown'&&currentNames.length){event.preventDefault();setActive(activeIndex+1)}
+    else if(event.key==='ArrowUp'&&currentNames.length){event.preventDefault();setActive(activeIndex-1)}
+    else if(event.key==='Enter'&&activeIndex>=0){event.preventDefault();choose(currentNames[activeIndex])}
+    else if(event.key==='Escape')close();
+  });
 }
 function conflictDescription(paths){
   const fields=[...new Set((paths||[]).map(path=>path.split('.').pop()).filter(Boolean))];
@@ -941,7 +1076,7 @@ function render(){
 
   let gps=[];
   if(isPapers){
-    if(groupBy==='status')ST.filter(s=>s.key!=='revision_under_review').forEach(s=>{const it=fl.filter(p=>statusCategory(p.status)===s.key);if(it.length)gps.push({...s,items:it})});
+    if(groupBy==='status')ST.filter(s=>s.key!=='revision_under_review').forEach(s=>{const it=orderPapersWithinStatusGroup(fl.filter(p=>statusCategory(p.status)===s.key),s.key);if(it.length)gps.push({...s,items:it})});
     else if(groupBy==='role')RL.forEach(r=>{const it=fl.filter(p=>p.role===r.key);if(it.length)gps.push({emoji:'👤',label:r.label,color:'#7c3aed',items:it})});
     else if(groupBy==='journal'){const jm={};fl.forEach(p=>{const j=p.journal||'Unspecified';if(!jm[j])jm[j]=[];jm[j].push(p)});Object.entries(jm).sort((a,b)=>b[1].length-a[1].length).forEach(([j,items])=>gps.push({emoji:'📰',label:j,color:'#0ea5e9',items}));}
     else if(groupBy==='priority'){[3,2,1].forEach(pr=>{const it=fl.filter(p=>(p.priority||1)===pr);if(it.length)gps.push({emoji:pr===3?'🔴':pr===2?'🟡':'⚪',label:['','Normal','Important','Urgent'][pr],color:pr===3?'#ef4444':pr===2?'#f59e0b':'#94a3b8',items:it})})}
@@ -1020,7 +1155,7 @@ function render(){
   </div>
   ${view==='list'?`
   <div class="tb">
-    <div class="sbox"><span class="ic">🔍</span><input id="xSch" placeholder="Search titles, journals, co-authors, or tags..." value="${esc(search)}"></div>
+    <div class="sbox"><span class="ic">🔍</span><input id="xSch" placeholder="Search titles, journals, co-authors, or tags..." value="${escAttr(search)}"></div>
     <div class="gtog">
       ${isPapers?`
       <button class="${groupBy==='status'?'ac':''}" data-g="status">Status</button>
@@ -1215,9 +1350,9 @@ function renderFilterConsole(){
   const journals=[...new Set(baseData.map(x=>x.journal).filter(j=>j))].sort();
 
   return `<div class="filt-console">
-    <div class="filt-grp"><label>Year</label><select id="filtYear" onchange="updateFilter('year',this.value)"><option value="">All</option>${years.map(y=>`<option value="${y}" ${filterYear===y?'selected':''}>${y}</option>`).join('')}</select></div>
-    <div class="filt-grp"><label>Month</label><select id="filtMonth" onchange="updateFilter('month',this.value)" ${!filterYear?'disabled':''}><option value="">All</option>${months.map(m=>`<option value="${m}" ${filterMonth===m?'selected':''}>${m}</option>`).join('')}</select></div>
-    <div class="filt-grp"><label>Journal</label><select id="filtJour" onchange="updateFilter('journal',this.value)"><option value="">All Journals</option>${journals.map(j=>`<option value="${esc(j)}" ${filterJournal===j?'selected':''}>${esc(j)}</option>`).join('')}</select></div>
+    <div class="filt-grp"><label>Year</label><select id="filtYear" onchange="updateFilter('year',this.value)"><option value="">All</option>${years.map(y=>`<option value="${escAttr(y)}" ${filterYear===y?'selected':''}>${esc(y)}</option>`).join('')}</select></div>
+    <div class="filt-grp"><label>Month</label><select id="filtMonth" onchange="updateFilter('month',this.value)" ${!filterYear?'disabled':''}><option value="">All</option>${months.map(m=>`<option value="${escAttr(m)}" ${filterMonth===m?'selected':''}>${esc(m)}</option>`).join('')}</select></div>
+    <div class="filt-grp"><label>Journal</label><select id="filtJour" onchange="updateFilter('journal',this.value)"><option value="">All Journals</option>${journals.map(j=>`<option value="${escAttr(j)}" ${filterJournal===j?'selected':''}>${esc(j)}</option>`).join('')}</select></div>
     <button class="ebtn" onclick="clearFilters()" style="height:fit-content">Reset Filters</button>
   </div>`;
 }
@@ -1656,13 +1791,13 @@ function openAccountModal(id,type){
     <div class="acc-row">
       <label>Username / Email</label>
       <div class="acc-input-wrap">
-        <input type="text" value="${esc(item.account.username)}" readonly>
+        <input type="text" value="${escAttr(item.account.username)}" readonly>
       </div>
     </div>
     <div class="acc-row">
       <label>Password</label>
       <div class="acc-input-wrap">
-        <input type="password" id="accPwdDisplay" value="${esc(item.account.password)}" readonly>
+        <input type="password" id="accPwdDisplay" value="${escAttr(item.account.password)}" readonly>
         <button class="acc-eye-btn" onclick="toggleModalPwd()">👁️</button>
       </div>
     </div>
@@ -1736,33 +1871,55 @@ function reviewEditorDraft(source={}){
   };
 }
 
+function timelineEventOptionsHTML(choices,selected=''){
+  let html=`<option value="" disabled ${selected?'':'selected'}>Select an event…</option>`;
+  (choices||[]).forEach(label=>{html+=`<option value="${escAttr(label)}" ${timelineLabelsEqual(label,selected)?'selected':''}>${esc(label)}</option>`});
+  return html;
+}
+function paperTimelineEventColor(label,fallback='#94a3b8'){
+  const mappedStatus=timelineStatusForEvent(label);
+  return(ST.find(status=>status.key===mappedStatus)||ST.find(status=>status.label===label))?.color||fallback;
+}
+
 function showPaperForm(isN){
   const p=paperEditorDraft(isN?{}:editing);
   const initialDraft=cloneMergeValue(p);
   const draftLabels=[...labels];
   let accountEditing=false;
+  let timelineEditingId='',timelineEditBackup=null;
+  let pendingWorkId=p.workId||'';
+  let timelineAddDraft={date:td(),label:'',note:''};
 
   let ov=document.getElementById('f-ov');if(!ov){ov=document.createElement('div');ov.id='f-ov';ov.className='mo';document.body.appendChild(ov)}
 
   function rf(){
     let so='';ST.forEach(s=>{const ac=p.status===s.key;so+=`<button type="button" class="sop ${ac?'ac':''}" data-sk="${s.key}" style="${ac?`border-color:${s.color};color:${s.color};background:${s.color}15`:''}">${s.emoji} ${s.label}</button>`});
-    let ro='';RL.forEach(r=>{ro+=`<option value="${r.key}" ${p.role===r.key?'selected':''}>${r.label}</option>`});
+    let ro='';RL.forEach(r=>{ro+=`<option value="${escAttr(r.key)}" ${p.role===r.key?'selected':''}>${r.label}</option>`});
     const tl=sortTimelineEvents(p.timeline,true);
-    let tlH='';tl.forEach(ev=>{tlH+=`<div class="tl-ev"><div class="dot" style="background:${ev.color||'#94a3b8'}"></div><div class="date">${fD(ev.date)}</div><div class="label">${esc(ev.label)}</div>${ev.note?`<div class="note">${esc(ev.note)}</div>`:''}<button class="del-ev" data-evid="${ev.id}">✕</button></div>`});
+    const eventChoices=timelineEventChoices(draftLabels,p.timeline);
+    let tlH='';tl.forEach(ev=>{
+      if(timelineEditingId===ev.id){
+        tlH+=`<div class="tl-ev tl-ev-editing" data-event-editor="${escAttr(ev.id)}"><div class="dot" style="background:${ev.color||'#94a3b8'}"></div><div class="tl-edit-fields"><input type="date" class="fi" data-ev-date value="${escAttr(ev.date||'')}" aria-label="Event date"><select class="fi" data-ev-label aria-label="Event type">${timelineEventOptionsHTML(eventChoices,ev.label)}</select><input class="fi" data-ev-note value="${escAttr(ev.note||'')}" placeholder="Optional note" aria-label="Event note"></div><div class="tl-edit-actions"><button type="button" class="bcan cancel-edit-ev" data-evid="${escAttr(ev.id)}">Cancel</button><button type="button" class="bsav save-edit-ev" data-evid="${escAttr(ev.id)}">Done</button></div></div>`;
+      }else{
+        tlH+=`<div class="tl-ev"><div class="dot" style="background:${ev.color||'#94a3b8'}"></div><div class="date">${fD(ev.date)}</div><div class="label">${esc(ev.label)}</div>${ev.note?`<div class="note">${esc(ev.note)}</div>`:''}<div class="tl-ev-actions"><button type="button" class="tl-ev-action edit-ev" data-evid="${escAttr(ev.id)}" title="${timelineEditingId?'Finish editing the current event first':'Edit event'}" aria-label="Edit event" ${timelineEditingId?'disabled':''}>✎</button><button type="button" class="tl-ev-action del-ev" data-evid="${escAttr(ev.id)}" title="Delete event" aria-label="Delete event">✕</button></div></div>`;
+      }
+    });
     let tagH='';(p.tags||[]).forEach((t,i)=>{tagH+=`<span class="cs-tag">${esc(t)}<span class="x" data-ti="${i}">✕</span></span>`});
-    let dlH='';draftLabels.forEach(l=>{dlH+=`<option value="${esc(l)}">`});
 
-    const workIds=[...new Set(papers.filter(x=>x.workId&&x.id!==p.id).map(x=>x.workId))];
-    let workOpts='<option value="">(No link; independent submission)</option><option value="__new__">+ Create New Work Group</option>';
+    const workIds=[...new Set([
+      ...papers.filter(x=>x.workId&&x.id!==p.id).map(x=>x.workId),
+      ...(pendingWorkId&&pendingWorkId!=='__new__'?[pendingWorkId]:[])
+    ])];
+    let workOpts=`<option value="" ${pendingWorkId?'':'selected'}>(No link; independent submission)</option><option value="__new__" ${pendingWorkId==='__new__'?'selected':''}>+ Create New Work Group</option>`;
     workIds.forEach(wid=>{
       const first=papers.find(x=>x.workId===wid);
-      const sel=p.workId===wid?'selected':'';
-      workOpts+=`<option value="${wid}" ${sel}>${esc((first?.title||'').slice(0,30))} (${getWorkCount(wid)} rounds)</option>`;
+      const sel=pendingWorkId===wid?'selected':'';
+      workOpts+=`<option value="${escAttr(wid)}" ${sel}>${esc((first?.title||'').slice(0,30))} (${getWorkCount(wid)} rounds)</option>`;
     });
 
     let histItems='';
-    if(p.workId){
-      const chain=getWorkChain(p.workId).filter(x=>x.id!==p.id);
+    if(pendingWorkId&&pendingWorkId!=='__new__'){
+      const chain=getWorkChain(pendingWorkId).filter(x=>x.id!==p.id);
       chain.forEach(cp=>{
         const cst=gs(cp.status);
         histItems+=`<div class="hist-item"><span class="jn">${esc(cp.journal||'?')}</span><span class="st sbdg" style="background:${cst.color}15;color:${cst.color};border:1px solid ${cst.color}30">${statusDisplayLabel(cp)}</span><span class="sep">·</span><span style="font-size:10px;color:var(--t3)">${fD(cp.submittedDate)}</span><span class="go" data-goid="${cp.id}">View →</span></div>`;
@@ -1770,19 +1927,19 @@ function showPaperForm(isN){
     }
 
     ov.innerHTML=`<div class="md"><div class="mh"><h2>${isN?'📄 New Submission':'✏️ Edit Submission'}</h2><button class="xbtn" id="fX">✕</button></div><div>
-    <div class="fg"><label class="fl">Paper Title *</label><input class="fi" id="fT" value="${esc(p.title)}" placeholder="Enter the paper title..."></div>
-    <div class="fr"><div class="fg"><label class="fl">Target Journal</label><input class="fi" id="fJ" value="${esc(p.journal)}" placeholder="e.g. Nature, Science..."></div><div class="fg nw"><label class="fl">Author Role</label><select class="fi" id="fR">${ro}</select></div>${p.role==='other'?`<div class="fg nw2"><label class="fl">Author Position</label><input type="number" class="fi" id="fAP" value="${esc(p.authorPosition||'')}" min="1" step="1" placeholder="e.g. 4"></div>`:''}</div>
+    <div class="fg"><label class="fl">Paper Title *</label><input class="fi" id="fT" value="${escAttr(p.title)}" placeholder="Enter the paper title..."></div>
+    <div class="fr"><div class="fg"><label class="fl">Target Journal</label><input class="fi" id="fJ" value="${escAttr(p.journal)}" placeholder="e.g. Nature, Science..."></div><div class="fg nw"><label class="fl">Author Role</label><select class="fi" id="fR">${ro}</select></div>${p.role==='other'?`<div class="fg nw2"><label class="fl">Author Position</label><input type="number" class="fi" id="fAP" value="${escAttr(p.authorPosition||'')}" min="1" step="1" placeholder="e.g. 4"></div>`:''}</div>
     <div class="fg"><label class="fl">Current Status</label><div class="so" id="fSO">${so}</div></div>
-    <div class="fr"><div class="fg"><label class="fl">Manuscript ID</label><input class="fi" id="fM" value="${esc(p.manuscriptId)}" placeholder="MS-2026-XXXX"></div><div class="fg nw2"><label class="fl">Priority</label><select class="fi" id="fPr"><option value="1" ${(p.priority||1)===1?'selected':''}>Normal</option><option value="2" ${p.priority===2?'selected':''}>Important</option><option value="3" ${p.priority===3?'selected':''}>Urgent</option></select></div><div class="fg nw"><label class="fl">Submission Date</label><input type="date" class="fi" id="fD" value="${p.submittedDate||''}"></div></div>
-    <div class="fr"><div class="fg"><label class="fl">Tracking URL</label><input class="fi" id="fU" value="${esc(p.trackingUrl)}" placeholder="https://mc.manuscriptcentral.com/..."></div>${p.status==='revision'?`<div class="fg nw"><label class="fl">Revision Deadline</label><input type="date" class="fi" id="fDL" value="${p.deadline||''}"></div>`:''}</div>
-    <div class="fg"><label class="fl">Co-authors</label><input class="fi" id="fA" value="${esc(p.coAuthors)}" placeholder="Name One, Name Two, Name Three..."></div>
+    <div class="fr"><div class="fg"><label class="fl">Manuscript ID</label><input class="fi" id="fM" value="${escAttr(p.manuscriptId)}" placeholder="MS-2026-XXXX"></div><div class="fg nw2"><label class="fl">Priority</label><select class="fi" id="fPr"><option value="1" ${(p.priority||1)===1?'selected':''}>Normal</option><option value="2" ${p.priority===2?'selected':''}>Important</option><option value="3" ${p.priority===3?'selected':''}>Urgent</option></select></div><div class="fg nw"><label class="fl">Submission Date</label><input type="date" class="fi" id="fD" value="${escAttr(p.submittedDate||'')}"></div></div>
+    <div class="fr"><div class="fg"><label class="fl">Tracking URL</label><input class="fi" id="fU" value="${escAttr(p.trackingUrl)}" placeholder="https://mc.manuscriptcentral.com/..."></div>${p.status==='revision'?`<div class="fg nw"><label class="fl">Revision Deadline</label><input type="date" class="fi" id="fDL" value="${escAttr(p.deadline||'')}"></div>`:''}</div>
+    <div class="fg"><label class="fl">Co-authors</label><input class="fi" id="fA" value="${escAttr(p.coAuthors)}" placeholder="Name One, Name Two, Name Three..."></div>
     <div class="fg"><label class="fl">Tags</label><div class="cs-row" id="tagR">${tagH}<input class="cs-add" id="tagIn" placeholder="+ Add tag"></div></div>
     <div class="fg"><label class="fl">Notes</label><textarea class="fi" id="fN" rows="2" placeholder="Review comments, revision plans...">${esc(p.notes||'')}</textarea></div>
 
     <div class="fg" style="background:var(--ibg);padding:10px;border-radius:7px"><label class="fl" style="display:flex;justify-content:space-between;align-items:center">System Account (optional)<button type="button" class="ebtn" id="fAccEdit" style="text-transform:none;letter-spacing:0">${accountEditing?'Editing':'Edit credentials'}</button></label>
       <div class="fr" style="gap:10px">
-        <div class="fg" style="flex:1;margin-bottom:0"><input class="fi" id="fAccUser" value="${esc(p.account?.username||'')}" placeholder="Username / email" autocomplete="off" data-1p-ignore="true" data-lpignore="true" ${accountEditing?'':'disabled'}></div>
-        <div class="fg" style="flex:1;margin-bottom:0;position:relative"><input class="fi" id="fAccPass" type="password" value="${esc(p.account?.password||'')}" placeholder="Password" autocomplete="new-password" data-1p-ignore="true" data-lpignore="true" ${accountEditing?'':'disabled'}><button type="button" onclick="toggleFormPwd('fAccPass')" ${accountEditing?'':'disabled'} style="position:absolute;right:8px;top:28px;background:none;border:none;cursor:pointer;font-size:12px;color:var(--t3)">👁️</button></div>
+        <div class="fg" style="flex:1;margin-bottom:0"><input class="fi" id="fAccUser" value="${escAttr(p.account?.username||'')}" placeholder="Username / email" autocomplete="off" data-1p-ignore="true" data-lpignore="true" ${accountEditing?'':'disabled'}></div>
+        <div class="fg" style="flex:1;margin-bottom:0;position:relative"><input class="fi" id="fAccPass" type="password" value="${escAttr(p.account?.password||'')}" placeholder="Password" autocomplete="new-password" data-1p-ignore="true" data-lpignore="true" ${accountEditing?'':'disabled'}><button type="button" onclick="toggleFormPwd('fAccPass')" ${accountEditing?'':'disabled'} style="position:absolute;right:8px;top:28px;background:none;border:none;cursor:pointer;font-size:12px;color:var(--t3)">👁️</button></div>
       </div>
     </div>
 
@@ -1793,11 +1950,10 @@ function showPaperForm(isN){
     </div>
 
     <div class="tls"><h3>📅 Timeline <span style="font-weight:400;font-size:10px;color:var(--t3)">(${(p.timeline||[]).length} events)</span></h3>
-    <datalist id="evLb">${dlH}</datalist>
     <div class="tl-add">
-      <div class="fg" style="flex:0 0 105px"><label class="fl">Date</label><input type="date" class="fi" id="evD" value="${td()}"></div>
-      <div class="fg" style="flex:1"><label class="fl">Event</label><input class="fi" id="evL" list="evLb" placeholder="With Editor..."></div>
-      <div class="fg" style="flex:1"><label class="fl">Note</label><input class="fi" id="evN" placeholder="Optional"></div>
+      <div class="fg" style="flex:0 0 105px"><label class="fl">Date</label><input type="date" class="fi" id="evD" value="${escAttr(timelineAddDraft.date)}"></div>
+      <div class="fg" style="flex:1"><label class="fl">Event</label><select class="fi" id="evL">${timelineEventOptionsHTML(eventChoices,timelineAddDraft.label)}</select></div>
+      <div class="fg" style="flex:1"><label class="fl">Note</label><input class="fi" id="evN" value="${escAttr(timelineAddDraft.note)}" placeholder="Optional"></div>
       <button class="bsav" id="evA" style="padding:7px 10px;flex-shrink:0">+</button>
     </div>
     ${tl.length?`<div class="tl-list">${tlH}</div>`:'<div style="font-size:11px;color:var(--t3)">No events</div>'}
@@ -1806,26 +1962,40 @@ function showPaperForm(isN){
     </div><div class="mf">${!isN?'<button class="bdel" id="fDl">🗑 Delete</button>':'<div></div>'}<div style="display:flex;gap:6px"><button class="bcan" id="fCa">Cancel</button><button class="bsav" id="fSv">${isN?'Add':'Save'}</button></div></div></div>`;
 
     ov.onclick=e=>{if(e.target===ov)e.stopPropagation()};
+    setupJournalAutocomplete('fJ');
     document.getElementById('fX').onclick=document.getElementById('fCa').onclick=()=>closeWithoutSaving();
     document.querySelectorAll('#fSO .sop').forEach(b=>{b.onclick=()=>{sync();p.status=b.dataset.sk;if(p.status!=='revision')p.deadline='';rf()}});
     document.getElementById('fR').onchange=e=>{sync();p.role=e.target.value;if(p.role!=='other')p.authorPosition='';rf()};
     document.getElementById('fAccEdit').onclick=()=>{sync();accountEditing=true;rf()};
 
+    const eventEditor=document.querySelector('[data-event-editor]');
+    if(eventEditor){
+      const event=p.timeline.find(item=>item.id===eventEditor.dataset.eventEditor);
+      if(event){
+        eventEditor.querySelector('[data-ev-date]').oninput=e=>{event.date=e.target.value};
+        eventEditor.querySelector('[data-ev-label]').onchange=e=>{event.label=e.target.value;event.color=paperTimelineEventColor(event.label)};
+        eventEditor.querySelector('[data-ev-note]').oninput=e=>{event.note=e.target.value};
+      }
+    }
+
     document.getElementById('evA').onclick=()=>{
-      const l=document.getElementById('evL').value.trim();if(!l)return;
+      sync();
+      const l=timelineAddDraft.label.trim();if(!l)return;
       if(!p.timeline)p.timeline=[];
-      const mappedStatus=timelineStatusForEvent(l);
-      const st2=ST.find(s=>s.key===mappedStatus)||ST.find(s=>s.label===l);
-      const event={id:uid(),date:document.getElementById('evD').value,label:l,color:st2?st2.color:'#94a3b8',note:document.getElementById('evN').value.trim()};
+      const event={id:uid(),date:timelineAddDraft.date,label:l,color:paperTimelineEventColor(l),note:timelineAddDraft.note.trim()};
+      const suggestedStatus=suggestedTimelineStatusForNewEvent(p.status,p.timeline,event);
       p.timeline.push(event);
       if(!draftLabels.includes(l))draftLabels.push(l);
-      if(mappedStatus){
-        const latestStatus=latestMappedTimelineStatus(p.timeline);
-        if(latestStatus){p.status=latestStatus;if(p.status!=='revision')p.deadline=''}
+      timelineAddDraft={date:td(),label:'',note:''};
+      if(suggestedStatus&&window.confirm(`Change the manuscript status to "${gs(suggestedStatus).label}"?`)){
+        p.status=suggestedStatus;if(p.status!=='revision')p.deadline='';
       }
-      sync();rf();
+      rf();
     };
-    document.querySelectorAll('.del-ev').forEach(b=>{b.onclick=()=>{p.timeline=p.timeline.filter(ev=>ev.id!==b.dataset.evid);sync();rf()}});
+    document.querySelectorAll('.edit-ev').forEach(b=>{b.onclick=()=>{sync();timelineEditingId=b.dataset.evid;timelineEditBackup=cloneMergeValue(p.timeline.find(ev=>ev.id===timelineEditingId));rf()}});
+    document.querySelectorAll('.save-edit-ev').forEach(b=>{b.onclick=()=>{sync();timelineEditingId='';timelineEditBackup=null;rf()}});
+    document.querySelectorAll('.cancel-edit-ev').forEach(b=>{b.onclick=()=>{sync();const index=p.timeline.findIndex(ev=>ev.id===b.dataset.evid);if(index>=0&&timelineEditBackup)p.timeline[index]=cloneMergeValue(timelineEditBackup);timelineEditingId='';timelineEditBackup=null;rf()}});
+    document.querySelectorAll('.del-ev').forEach(b=>{b.onclick=()=>{sync();p.timeline=p.timeline.filter(ev=>ev.id!==b.dataset.evid);if(timelineEditingId===b.dataset.evid){timelineEditingId='';timelineEditBackup=null}rf()}});
     document.querySelectorAll('.cs-tag .x').forEach(x=>{x.onclick=()=>{p.tags.splice(parseInt(x.dataset.ti),1);sync();rf()}});
     document.getElementById('tagIn').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();const v=e.target.value.trim();if(v&&!p.tags.includes(v)){p.tags.push(v);sync();rf()}}};
 
@@ -1836,9 +2006,8 @@ function showPaperForm(isN){
 
     document.getElementById('fSv').onclick=async()=>{
       sync();if(!p.title.trim()){toast('Please enter a title','error');return}
-      const wkVal=document.getElementById('fWk').value;
-      if(wkVal==='__new__'){p.workId=uid()}
-      else if(wkVal){p.workId=wkVal}
+      if(pendingWorkId==='__new__'){p.workId=uid()}
+      else if(pendingWorkId){p.workId=pendingWorkId}
       else{p.workId=''}
 
       p.id=p.id||uid();
@@ -1872,6 +2041,12 @@ function showPaperForm(isN){
       p.notes=document.getElementById('fN')?.value||'';
       p.priority=parseInt(document.getElementById('fPr')?.value||'1');
       p.deadline=p.status==='revision'?(document.getElementById('fDL')?.value||''):'';
+      pendingWorkId=document.getElementById('fWk')?.value??pendingWorkId;
+      timelineAddDraft={
+        date:document.getElementById('evD')?.value??timelineAddDraft.date,
+        label:document.getElementById('evL')?.value??timelineAddDraft.label,
+        note:document.getElementById('evN')?.value??timelineAddDraft.note
+      };
       if(accountEditing){
         if(!p.account)p.account={};
         p.account.username=document.getElementById('fAccUser')?.value||'';
@@ -1881,8 +2056,8 @@ function showPaperForm(isN){
 
     function closeWithoutSaving(afterClose){
       sync();
-      const workChanged=(document.getElementById('fWk')?.value||'')!==(initialDraft.workId||'');
-      const pendingInput=Boolean(document.getElementById('evL')?.value.trim()||document.getElementById('evN')?.value.trim()||document.getElementById('tagIn')?.value.trim());
+      const workChanged=pendingWorkId!==(initialDraft.workId||'');
+      const pendingInput=Boolean(timelineAddDraft.label.trim()||timelineAddDraft.note.trim()||timelineAddDraft.date!==td()||document.getElementById('tagIn')?.value.trim());
       const changedFields=[...new Set([...Object.keys(initialDraft),...Object.keys(p)])].filter(key=>!sameMergeValue(initialDraft[key],p[key]));
       if((changedFields.length||workChanged||pendingInput)&&!confirm('Discard the unsaved changes in this editor?'))return;
       editing=null;rmF();
@@ -1897,37 +2072,47 @@ function showReviewForm(isN){
   const r=reviewEditorDraft(isN?{inviteDate:td()}:editing);
   const initialDraft=cloneMergeValue(r);
   let accountEditing=false;
+  let timelineEditingId='',timelineEditBackup=null;
+  let pendingReviewWorkId=r.reviewWorkId||'';
+  let timelineAddDraft={date:td(),label:'',note:''};
 
   let ov=document.getElementById('f-ov');if(!ov){ov=document.createElement('div');ov.id='f-ov';ov.className='mo';document.body.appendChild(ov)}
 
   function rf(){
-    let decOpts='';RV_DEC.forEach(d=>{decOpts+=`<option value="${d.key}" ${r.decision===d.key?'selected':''}>${d.emoji} ${d.label}</option>`});
+    let decOpts='';RV_DEC.forEach(d=>{decOpts+=`<option value="${escAttr(d.key)}" ${r.decision===d.key?'selected':''}>${d.emoji} ${d.label}</option>`});
     const tl=sortTimelineEvents(r.timeline,true);
-    let tlH='';tl.forEach(ev=>{tlH+=`<div class="tl-ev"><div class="dot" style="background:${ev.color||'#94a3b8'}"></div><div class="date">${fD(ev.date)}</div><div class="label">${esc(ev.label)}</div>${ev.note?`<div class="note">${esc(ev.note)}</div>`:''}<button class="del-ev" data-evid="${ev.id}">✕</button></div>`});
-
-    const reviewWorkIds=[...new Set(reviews.filter(x=>x.reviewWorkId&&x.id!==r.id).map(x=>x.reviewWorkId))];
-    let workOpts='<option value="">(No link; independent review)</option><option value="__new__">+ Create New Review Group (same manuscript)</option>';
-    reviewWorkIds.forEach(wid=>{
-      const first=reviews.find(x=>x.reviewWorkId===wid);
-      const sel=r.reviewWorkId===wid?'selected':'';
-      workOpts+=`<option value="${wid}" ${sel}>${esc((first?.paperTitle||'').slice(0,30))} (${getReviewWorkCount(wid)} rounds)</option>`;
+    const eventChoices=timelineEventChoices(RV_EVENTS,r.timeline);
+    let tlH='';tl.forEach(ev=>{
+      if(timelineEditingId===ev.id){
+        tlH+=`<div class="tl-ev tl-ev-editing" data-event-editor="${escAttr(ev.id)}"><div class="dot" style="background:${ev.color||'#059669'}"></div><div class="tl-edit-fields"><input type="date" class="fi" data-ev-date value="${escAttr(ev.date||'')}" aria-label="Event date"><select class="fi rev" data-ev-label aria-label="Event type">${timelineEventOptionsHTML(eventChoices,ev.label)}</select><input class="fi" data-ev-note value="${escAttr(ev.note||'')}" placeholder="Optional note" aria-label="Event note"></div><div class="tl-edit-actions"><button type="button" class="bcan cancel-edit-ev" data-evid="${escAttr(ev.id)}">Cancel</button><button type="button" class="bsav rev save-edit-ev" data-evid="${escAttr(ev.id)}">Done</button></div></div>`;
+      }else{
+        tlH+=`<div class="tl-ev"><div class="dot" style="background:${ev.color||'#059669'}"></div><div class="date">${fD(ev.date)}</div><div class="label">${esc(ev.label)}</div>${ev.note?`<div class="note">${esc(ev.note)}</div>`:''}<div class="tl-ev-actions"><button type="button" class="tl-ev-action edit-ev" data-evid="${escAttr(ev.id)}" title="${timelineEditingId?'Finish editing the current event first':'Edit event'}" aria-label="Edit event" ${timelineEditingId?'disabled':''}>✎</button><button type="button" class="tl-ev-action del-ev" data-evid="${escAttr(ev.id)}" title="Delete event" aria-label="Delete event">✕</button></div></div>`;
+      }
     });
 
-    // Review event presets
-    let rvEvH='';RV_EVENTS.forEach(e=>{rvEvH+=`<option value="${e}">`});
+    const reviewWorkIds=[...new Set([
+      ...reviews.filter(x=>x.reviewWorkId&&x.id!==r.id).map(x=>x.reviewWorkId),
+      ...(pendingReviewWorkId&&pendingReviewWorkId!=='__new__'?[pendingReviewWorkId]:[])
+    ])];
+    let workOpts=`<option value="" ${pendingReviewWorkId?'':'selected'}>(No link; independent review)</option><option value="__new__" ${pendingReviewWorkId==='__new__'?'selected':''}>+ Create New Review Group (same manuscript)</option>`;
+    reviewWorkIds.forEach(wid=>{
+      const first=reviews.find(x=>x.reviewWorkId===wid);
+      const sel=pendingReviewWorkId===wid?'selected':'';
+      workOpts+=`<option value="${escAttr(wid)}" ${sel}>${esc((first?.paperTitle||'').slice(0,30))} (${getReviewWorkCount(wid)} rounds)</option>`;
+    });
 
     ov.innerHTML=`<div class="md"><div class="mh"><h2>${isN?'📪 New Peer Review':'✏️ Edit Peer Review'}</h2><button class="xbtn" id="fX">✕</button></div><div>
-    <div class="fg"><label class="fl">Review Journal *</label><input class="fi rev" id="rvJ" value="${esc(r.journal)}" placeholder="Journal name..."></div>
-    <div class="fg"><label class="fl">Paper Title</label><input class="fi rev" id="rvT" value="${esc(r.paperTitle)}" placeholder="Manuscript title..."></div>
-    <div class="fr"><div class="fg"><label class="fl">Invitation Date</label><input type="date" class="fi" id="rvI" value="${r.inviteDate||''}"></div><div class="fg"><label class="fl">Due Date</label><input type="date" class="fi" id="rvD" value="${r.dueDate||''}"></div><div class="fg nw2"><label class="fl">Round</label><input type="number" class="fi" id="rvR" value="${r.round||1}" min="1"></div></div>
+    <div class="fg"><label class="fl">Review Journal *</label><input class="fi rev" id="rvJ" value="${escAttr(r.journal)}" placeholder="Journal name..."></div>
+    <div class="fg"><label class="fl">Paper Title</label><input class="fi rev" id="rvT" value="${escAttr(r.paperTitle)}" placeholder="Manuscript title..."></div>
+    <div class="fr"><div class="fg"><label class="fl">Invitation Date</label><input type="date" class="fi" id="rvI" value="${escAttr(r.inviteDate||'')}"></div><div class="fg"><label class="fl">Due Date</label><input type="date" class="fi" id="rvD" value="${escAttr(r.dueDate||'')}"></div><div class="fg nw2"><label class="fl">Round</label><input type="number" class="fi" id="rvR" value="${escAttr(r.round||1)}" min="1"></div></div>
     <div class="fg"><label class="fl">Review Decision</label><select class="fi rev" id="rvDec">${decOpts}</select></div>
-    <div class="fg"><label class="fl">Review System Link</label><input class="fi rev" id="rvL" value="${esc(r.link)}" placeholder="https://..."></div>
+    <div class="fg"><label class="fl">Review System Link</label><input class="fi rev" id="rvL" value="${escAttr(r.link)}" placeholder="https://..."></div>
     <div class="fg"><label class="fl">Review Notes</label><textarea class="fi" id="rvN" rows="3" placeholder="Assessment, major issues...">${esc(r.notes||'')}</textarea></div>
 
     <div class="fg" style="background:var(--ibg);padding:10px;border-radius:7px;margin-top:10px"><label class="fl" style="display:flex;justify-content:space-between;align-items:center">Review System Account (optional)<button type="button" class="ebtn" id="rvAccEdit" style="text-transform:none;letter-spacing:0">${accountEditing?'Editing':'Edit credentials'}</button></label>
       <div class="fr" style="gap:10px">
-        <div class="fg" style="flex:1;margin-bottom:0"><input class="fi" id="rvAccUser" value="${esc(r.account?.username||'')}" placeholder="Username / email" autocomplete="off" data-1p-ignore="true" data-lpignore="true" ${accountEditing?'':'disabled'}></div>
-        <div class="fg" style="flex:1;margin-bottom:0;position:relative"><input class="fi" id="rvAccPass" type="password" value="${esc(r.account?.password||'')}" placeholder="Password" autocomplete="new-password" data-1p-ignore="true" data-lpignore="true" ${accountEditing?'':'disabled'}><button type="button" onclick="toggleFormPwd('rvAccPass')" ${accountEditing?'':'disabled'} style="position:absolute;right:8px;top:28px;background:none;border:none;cursor:pointer;font-size:12px;color:var(--t3)">👁️</button></div>
+        <div class="fg" style="flex:1;margin-bottom:0"><input class="fi" id="rvAccUser" value="${escAttr(r.account?.username||'')}" placeholder="Username / email" autocomplete="off" data-1p-ignore="true" data-lpignore="true" ${accountEditing?'':'disabled'}></div>
+        <div class="fg" style="flex:1;margin-bottom:0;position:relative"><input class="fi" id="rvAccPass" type="password" value="${escAttr(r.account?.password||'')}" placeholder="Password" autocomplete="new-password" data-1p-ignore="true" data-lpignore="true" ${accountEditing?'':'disabled'}><button type="button" onclick="toggleFormPwd('rvAccPass')" ${accountEditing?'':'disabled'} style="position:absolute;right:8px;top:28px;background:none;border:none;cursor:pointer;font-size:12px;color:var(--t3)">👁️</button></div>
       </div>
     </div>
 
@@ -1937,11 +2122,10 @@ function showReviewForm(isN){
     </div>
 
     <div class="tls"><h3>📅 Review Timeline <span style="font-weight:400;font-size:10px;color:var(--t3)">(${(r.timeline||[]).length} events)</span></h3>
-    <datalist id="rvEvLb">${rvEvH}</datalist>
     <div class="tl-add">
-      <div class="fg" style="flex:0 0 105px"><label class="fl">Date</label><input type="date" class="fi" id="evD" value="${td()}"></div>
-      <div class="fg" style="flex:1"><label class="fl">Event</label><input class="fi" id="evL" list="rvEvLb" placeholder="Select or enter..."></div>
-      <div class="fg" style="flex:1"><label class="fl">Note</label><input class="fi" id="evN" placeholder="Optional"></div>
+      <div class="fg" style="flex:0 0 105px"><label class="fl">Date</label><input type="date" class="fi" id="evD" value="${escAttr(timelineAddDraft.date)}"></div>
+      <div class="fg" style="flex:1"><label class="fl">Event</label><select class="fi rev" id="evL">${timelineEventOptionsHTML(eventChoices,timelineAddDraft.label)}</select></div>
+      <div class="fg" style="flex:1"><label class="fl">Note</label><input class="fi" id="evN" value="${escAttr(timelineAddDraft.note)}" placeholder="Optional"></div>
       <button class="bsav rev" id="evA" style="padding:7px 10px;flex-shrink:0">+</button>
     </div>
     ${tl.length?`<div class="tl-list">${tlH}</div>`:'<div style="font-size:11px;color:var(--t3)">No events</div>'}
@@ -1949,25 +2133,40 @@ function showReviewForm(isN){
     </div><div class="mf">${!isN?'<button class="bdel" id="fDl">🗑 Delete</button>':'<div></div>'}<div style="display:flex;gap:6px"><button class="bcan" id="fCa">Cancel</button><button class="bsav rev" id="fSv">${isN?'Add':'Save'}</button></div></div></div>`;
 
     ov.onclick=e=>{if(e.target===ov)e.stopPropagation()};
+    setupJournalAutocomplete('rvJ');
     document.getElementById('fX').onclick=document.getElementById('fCa').onclick=()=>closeWithoutSaving();
     document.getElementById('rvAccEdit').onclick=()=>{syncR();accountEditing=true;rf()};
 
+    const eventEditor=document.querySelector('[data-event-editor]');
+    if(eventEditor){
+      const event=r.timeline.find(item=>item.id===eventEditor.dataset.eventEditor);
+      if(event){
+        eventEditor.querySelector('[data-ev-date]').oninput=e=>{event.date=e.target.value};
+        eventEditor.querySelector('[data-ev-label]').onchange=e=>{event.label=e.target.value;event.color='#059669'};
+        eventEditor.querySelector('[data-ev-note]').oninput=e=>{event.note=e.target.value};
+      }
+    }
+
     document.getElementById('evA').onclick=()=>{
-      const l=document.getElementById('evL').value.trim();if(!l)return;
+      syncR();
+      const l=timelineAddDraft.label.trim();if(!l)return;
       if(!r.timeline)r.timeline=[];
-      r.timeline.push({id:uid(),date:document.getElementById('evD').value,label:l,color:'#059669',note:document.getElementById('evN').value.trim()});
-      syncR();rf();
+      r.timeline.push({id:uid(),date:timelineAddDraft.date,label:l,color:'#059669',note:timelineAddDraft.note.trim()});
+      timelineAddDraft={date:td(),label:'',note:''};
+      rf();
     };
-    document.querySelectorAll('.del-ev').forEach(b=>{b.onclick=()=>{r.timeline=r.timeline.filter(ev=>ev.id!==b.dataset.evid);syncR();rf()}});
+    document.querySelectorAll('.edit-ev').forEach(b=>{b.onclick=()=>{syncR();timelineEditingId=b.dataset.evid;timelineEditBackup=cloneMergeValue(r.timeline.find(ev=>ev.id===timelineEditingId));rf()}});
+    document.querySelectorAll('.save-edit-ev').forEach(b=>{b.onclick=()=>{syncR();timelineEditingId='';timelineEditBackup=null;rf()}});
+    document.querySelectorAll('.cancel-edit-ev').forEach(b=>{b.onclick=()=>{syncR();const index=r.timeline.findIndex(ev=>ev.id===b.dataset.evid);if(index>=0&&timelineEditBackup)r.timeline[index]=cloneMergeValue(timelineEditBackup);timelineEditingId='';timelineEditBackup=null;rf()}});
+    document.querySelectorAll('.del-ev').forEach(b=>{b.onclick=()=>{syncR();r.timeline=r.timeline.filter(ev=>ev.id!==b.dataset.evid);if(timelineEditingId===b.dataset.evid){timelineEditingId='';timelineEditBackup=null}rf()}});
 
     document.getElementById('fSv').onclick=async()=>{
       syncR();
       if(!r.journal.trim()){toast('Please enter a journal name','error');return}
       r.status=r.decision?'completed':'pending';
 
-      const wkVal=document.getElementById('rvWk').value;
-      if(wkVal==='__new__'){r.reviewWorkId=uid()}
-      else if(wkVal){r.reviewWorkId=wkVal}
+      if(pendingReviewWorkId==='__new__'){r.reviewWorkId=uid()}
+      else if(pendingReviewWorkId){r.reviewWorkId=pendingReviewWorkId}
       else{r.reviewWorkId=''}
 
       r.id=r.id||uid();
@@ -1995,6 +2194,12 @@ function showReviewForm(isN){
       r.decision=document.getElementById('rvDec')?.value||'';
       r.link=document.getElementById('rvL')?.value||'';
       r.notes=document.getElementById('rvN')?.value||'';
+      pendingReviewWorkId=document.getElementById('rvWk')?.value??pendingReviewWorkId;
+      timelineAddDraft={
+        date:document.getElementById('evD')?.value??timelineAddDraft.date,
+        label:document.getElementById('evL')?.value??timelineAddDraft.label,
+        note:document.getElementById('evN')?.value??timelineAddDraft.note
+      };
       const accUser=document.getElementById('rvAccUser');
       const accPass=document.getElementById('rvAccPass');
       if(accountEditing&&accUser&&accPass){
@@ -2006,8 +2211,8 @@ function showReviewForm(isN){
 
     function closeWithoutSaving(){
       syncR();
-      const workChanged=(document.getElementById('rvWk')?.value||'')!==(initialDraft.reviewWorkId||'');
-      const pendingInput=Boolean(document.getElementById('evL')?.value.trim()||document.getElementById('evN')?.value.trim());
+      const workChanged=pendingReviewWorkId!==(initialDraft.reviewWorkId||'');
+      const pendingInput=Boolean(timelineAddDraft.label.trim()||timelineAddDraft.note.trim()||timelineAddDraft.date!==td());
       if((!sameMergeValue(r,initialDraft)||workChanged||pendingInput)&&!confirm('Discard the unsaved changes in this editor?'))return;
       editing=null;rmF();render();
     }
